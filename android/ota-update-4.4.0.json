@@ -1,0 +1,43 @@
+{
+  "version": "4.4.0",
+  "versionCode": 54,
+  "releaseDate": "2026-05-15",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "FIX: Live TV, Movies, Series, and Guide now persist category, focused item, and scroll position so returning from player/detail restores where you left off.",
+    "FIX: Guide channel column and program grid vertical mapping now stays locked with explicit synchronized list-state mirroring, eliminating row drift after long scrolling.",
+    "NEW: Time-shift playback is implemented from Guide program selection (Watch From Start) when archive/catch-up is available.",
+    "FIX: PlayerViewModel now supports timeshift stream routing with Xtream archive URL generation.",
+    "FIX: Guide and Live TV now sync focused channel back from active player/zap state on resume.",
+    "IMPROVEMENT: Navigation restore behavior is now resilient across recomposition and process recreation using SavedStateHandle persistence."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_4_4_0_LINK/app-firestick-release.apk?dl=1",
+      "apkSize": 59196450,
+      "sha256": "647eebf4f454e5cd02042c44d4f43792899dc3331ab925358e5960bc9258922e",
+      "minSdk": 21,
+      "targetSdk": 35,
+      "abi": [
+        "armeabi-v7a"
+      ]
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_PREMIUM_4_4_0_LINK/app-premium-release.apk?dl=1",
+      "apkSize": 60454961,
+      "sha256": "f2eb1b418f98451052f3728a3c0934db232a7e85b5d541145ca50cbbcbaab89e",
+      "minSdk": 21,
+      "targetSdk": 35,
+      "abi": [
+        "arm64-v8a"
+      ]
+    }
+  },
+  "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_4_4_0_LINK/app-firestick-release.apk?dl=1",
+  "apkSize": 59196450,
+  "sha256": "647eebf4f454e5cd02042c44d4f43792899dc3331ab925358e5960bc9258922e",
+  "notes": "STEPS TO PUBLISH:\n1. Upload both 4.4.0 APKs to Dropbox and copy direct links (dl=1).\n2. Replace REPLACE_WITH_FIRESTICK_4_4_0_LINK and REPLACE_WITH_PREMIUM_4_4_0_LINK with real Dropbox IDs.\n3. Save this file as update.json in gist 6056e65b41641393abf585cecbd92d07."
+}

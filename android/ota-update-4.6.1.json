@@ -1,0 +1,33 @@
+{
+  "versionCode": 60,
+  "versionName": "4.6.1",
+  "buildDate": "2026-05-18",
+  "flavor": "firestick",
+  "applicationId": "com.dylandos.iptv.ultimate.firestick",
+  "minSdk": 21,
+  "targetSdk": 35,
+  "apkSizeBytes": 59407039,
+  "apkSizeMB": "56.66 MB",
+  "sha256": "36067BD9D5CCB2AE23518E2ACB077816A136674F959500D28EE332481A253879",
+  "releaseNotes": [
+    "CRITICAL — Series screen now uses Paging 3 (20 items per page). Previously all series loaded into memory simultaneously, causing OOM crashes and sluggish scrolling on large IPTV providers.",
+    "CRITICAL — D-pad stops working after closing series detail popup is fixed. Popup close now scrolls grid back to the focused card before restoring focus, preventing silent requestFocus() failures on off-screen items.",
+    "CRITICAL — moveFocus() in SeriesViewModel now calls persistFocus() so D-pad position is remembered across navigation.",
+    "HIGH — TvFocusable: replaced Spring.DampingRatioMediumBouncy (oscillating spring) and infinite glow pulse animation with a simple tween(100ms). Reduces Compose animation thread load by ~75% during D-pad navigation across grids.",
+    "HIGH — DylandosFocusSystem: same spring → tween(100ms) fix applied.",
+    "HIGH — Hero banner: removed dead LazyListState (pagerState was created but never attached to any Lazy layout). Image now decoded at 640×360 with proper disk cache key — prevents full-res bitmap decoding for banner images.",
+    "HIGH — ContentFilterRepository: FilterSettings now cached in-memory for 60 seconds. Eliminated 7+ redundant DataStore reads per navigation session (Home + Movies + Series each read settings 2-4 times).",
+    "HIGH — XtreamRepository: vodInfoCache capped at 30 entries (was 100, ~20MB); seriesInfoCache capped at 10 entries (was 50, ~25MB). Reduces peak heap pressure on Firestick by ~35MB.",
+    "HIGH — HomeScreen banner LaunchedEffect(isFocused) antipattern replaced with SideEffect.",
+    "HIGH — ChannelCard logos in Home rails now decoded at 80×80 with proper cache policy.",
+    "MEDIUM — FirestickKeyMap.isConfirmKey() now includes BUTTON_A (keyCode 96). Some Firestick firmware maps the OK button to BUTTON_A instead of DPAD_CENTER, causing the select action to silently fail.",
+    "MEDIUM — SeriesPosterCard and MoviePosterCard now explicitly handle isRemoteConfirmKey() in onKeyEvent for all Firestick remote variants."
+  ],
+  "fixes": {
+    "CRITICAL": 3,
+    "HIGH": 7,
+    "MEDIUM": 2
+  },
+  "buildStatus": "SUCCESS",
+  "signingAlias": "dylandos"
+}

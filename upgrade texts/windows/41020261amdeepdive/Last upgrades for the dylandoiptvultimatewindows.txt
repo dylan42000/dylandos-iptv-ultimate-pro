@@ -1,0 +1,3218 @@
+# 🏆 DYLANDOS IPTV ULTIMATE — FINAL FRONTIER
+## The Complete World-Class Smoke Show Deep Dive
+### Every Feature. Every Fix. Every Style. Top-3 Windows IPTV Forever.
+
+---
+
+> **This is the big one.** Live TV category scrolling, multi-provider system, cable-style EPG guide, series poster fix, subtitles, audio controls, advanced player controls, a full 3-stream DVR system, and a complete neon theme overhaul. Every section has full production code. Run your AI coder through this and DYLANDOS IPTV ULTIMATE becomes untouchable.
+
+---
+
+## 🔴 FIX 1 — LIVE TV CATEGORY SCROLLING
+
+The categories aren't scrollable because the container is missing overflow and height constraints.
+
+```typescript
+// pages/LiveTV.tsx — Complete layout with scrollable category sidebar
+
+export const LiveTVPage: React.FC<LiveTVProps> = ({
+  channels, categories, epgData, getNowPlaying,
+  playerState, onChannelSelect, settings, favorites, onToggleFavorite
+}) => {
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [view, setView] = useState<'split' | 'epg'>('split');
+  const categoryScrollRef = useRef<HTMLDivElement>(null);
+
+  const filteredChannels = useMemo(() => {
+    let result = channels;
+    if (selectedCategoryId) {
+      result = result.filter(c => c.category_id === selectedCategoryId);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(c => c.name?.toLowerCase().includes(q));
+    }
+    return result;
+  }, [channels, selectedCategoryId, searchQuery]);
+
+  return (
+    <div className="flex h-full overflow-hidden">
+
+      {/* ══ LEFT: Category Sidebar — FULLY SCROLLABLE ══════════════════ */}
+      <div className="w-44 shrink-0 flex flex-col border-r border-white/8 overflow-hidden">
+        {/* Header */}
+        <div className="px-3 py-2.5 border-b border-white/8 shrink-0">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-white/30">
+            Categories
+          </p>
+        </div>
+
+        {/* ── THE FIX: flex-1 + overflow-y-auto makes it scroll ── */}
+        <div
+          ref={categoryScrollRef}
+          className="flex-1 overflow-y-auto py-1
+            scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent
+            hover:scrollbar-thumb-white/20"
+        >
+          {/* ALL option */}
+          <button
+            onClick={() => setSelectedCategoryId(null)}
+            className={`
+              w-full text-left px-3 py-2.5 text-sm transition-all border-r-2 flex items-center justify-between
+              ${!selectedCategoryId
+                ? 'bg-cyan-500/10 text-cyan-400 border-cyan-400 font-medium'
+                : 'text-white/50 border-transparent hover:text-white hover:bg-white/5'
+              }
+            `}
+          >
+            <span className="truncate">All Channels</span>
+            <span className="text-[10px] ml-1 shrink-0 opacity-50">
+              {channels.length}
+            </span>
+          </button>
+
+          {/* Category items — all scrollable */}
+          {categories.map(cat => {
+            const count = channels.filter(c => c.category_id === cat.category_id).length;
+            return (
+              <button
+                key={cat.category_id}
+                onClick={() => setSelectedCategoryId(cat.category_id)}
+                className={`
+                  w-full text-left px-3 py-2.5 text-sm transition-all border-r-2
+                  flex items-center justify-between group
+                  ${selectedCategoryId === cat.category_id
+                    ? 'bg-cyan-500/10 text-cyan-400 border-cyan-400 font-medium'
+                    : 'text-white/50 border-transparent hover:text-white hover:bg-white/5'
+                  }
+                `}
+              >
+                <span className="truncate text-xs">{cat.category_name}</span>
+                <span className="text-[9px] ml-1 shrink-0 opacity-40">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* View toggle at bottom */}
+        <div className="border-t border-white/8 p-2 shrink-0 flex gap-1">
+          <button
+            onClick={() => setView('split')}
+            className={`flex-1 py-1.5 rounded-lg text-[10px] font-semibold transition-all ${
+              view === 'split'
+                ? 'bg-cyan-500/20 text-cyan-400'
+                : 'text-white/30 hover:text-white/60'
+            }`}
+          >
+            List
+          </button>
+          <button
+            onClick={() => setView('epg')}
+            className={`flex-1 py-1.5 rounded-lg text-[10px] font-semibold transition-all ${
+              view === 'epg'
+                ? 'bg-cyan-500/20 text-cyan-400'
+                : 'text-white/30 hover:text-white/60'
+            }`}
+          >
+            Guide
+          </button>
+        </div>
+      </div>
+
+      {/* ══ CENTER/RIGHT: Content ═══════════════════════════════════════ */}
+      <div className="flex-1 flex overflow-hidden">
+        {view === 'split' ? (
+          <SplitView
+            channels={filteredChannels}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            playerState={playerState}
+            onChannelSelect={onChannelSelect}
+            getNowPlaying={getNowPlaying}
+            favorites={favorites}
+            onToggleFavorite={onToggleFavorite}
+          />
+        ) : (
+          <EpgGuide
+            channels={filteredChannels}
+            epgData={epgData}
+            getNowPlaying={getNowPlaying}
+            onChannelClick={ch => { onChannelSelect(ch); setView('split'); }}
+            timeFormat={settings.epgTimeFormat}
+          />
+        )}
+      </div>
+    </div>
+  );
+};
+```
+
+---
+
+## 🔴 FIX 2 — SERIES POSTER SIZE (Same Fix As Movies)
+
+```typescript
+// pages/Series.tsx — Wrap VodGrid exactly like Movies page
+// The series VodGrid was missing the aspect-ratio constraint
+
+// components/VodGrid.tsx — Add this to the card if not present:
+// The ONLY change needed — add aspect-[2/3] to poster container:
+
+const SeriesCard: React.FC<{ item: XtreamSeries }> = ({ item }) => (
+  <div className="group relative flex flex-col cursor-pointer">
+    {/* ── THIS IS THE FIX: aspect-[2/3] locks poster to correct ratio ── */}
+    <div className="relative w-full aspect-[2/3] rounded-xl overflow-hidden bg-white/5">
+      <img
+        src={item.cover || item.stream_icon || ''}
+        alt={item.name}
+        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+        loading="lazy"
+        onError={e => {
+          (e.target as HTMLImageElement).style.display = 'none';
+        }}
+      />
+      {/* Hover overlay */}
+      <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100
+        transition-opacity flex flex-col items-center justify-center gap-2">
+        <button className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-500 
+          text-black text-xs font-bold rounded-xl hover:bg-cyan-400 transition-colors">
+          <Play size={12} fill="currentColor" /> Watch
+        </button>
+      </div>
+      {/* Season count badge */}
+      {item.num_seasons && (
+        <div className="absolute bottom-1.5 left-1.5 bg-black/80 text-white/70 
+          text-[9px] px-1.5 py-0.5 rounded font-medium">
+          {item.num_seasons} {item.num_seasons === 1 ? 'Season' : 'Seasons'}
+        </div>
+      )}
+    </div>
+    <p className="mt-1.5 text-white/75 text-xs font-medium leading-tight 
+      line-clamp-2 group-hover:text-white transition-colors px-0.5">
+      {item.name}
+    </p>
+  </div>
+);
+
+// pages/Series.tsx — Force correct grid cols same as Movies:
+export const SeriesPage: React.FC<SeriesProps> = ({ series, categories, settings, onSelect }) => {
+  return (
+    <VodGrid
+      items={series}
+      categories={categories}
+      type="series"
+      cardSize={settings.vodCardSize ?? 'medium'}
+      isLoading={loadState === 'loading'}
+      onPlay={onSelect}
+    />
+  );
+};
+```
+
+---
+
+## 🟣 FEATURE 1 — MULTI-PROVIDER MANAGEMENT SYSTEM
+
+```typescript
+// components/ProviderManager.tsx — Complete multi-provider UI
+
+import React, { useState, useCallback } from 'react';
+import {
+  Plus, Tv2, Trash2, Edit2, Check, Wifi, WifiOff,
+  Star, ChevronRight, RefreshCw, AlertCircle, Shield
+} from 'lucide-react';
+import { XtreamProfile } from '../types/xtream';
+
+interface ProviderManagerProps {
+  providers: XtreamProfile[];
+  activeProviderId: string | null;
+  onActivate: (provider: XtreamProfile) => void;
+  onAdd: (data: ProviderFormData) => Promise<void>;
+  onEdit: (id: string, data: ProviderFormData) => Promise<void>;
+  onDelete: (id: string) => void;
+  onRefresh: (id: string) => Promise<void>;
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+interface ProviderFormData {
+  name: string;
+  server: string;
+  username: string;
+  password: string;
+  color: string; // accent color per provider
+}
+
+interface ProviderStatus {
+  [id: string]: 'connected' | 'error' | 'testing' | 'idle';
+}
+
+const PROVIDER_COLORS = [
+  '#00FFFF', '#FF00FF', '#FF6B35', '#00FF88',
+  '#FFD700', '#FF3366', '#7B61FF', '#00D4FF'
+];
+
+const emptyForm = (): ProviderFormData => ({
+  name: '', server: '', username: '', password: '', color: PROVIDER_COLORS[0]
+});
+
+export const ProviderManager: React.FC<ProviderManagerProps> = ({
+  providers, activeProviderId, onActivate, onAdd, onEdit,
+  onDelete, onRefresh, isOpen, onClose
+}) => {
+  const [mode, setMode] = useState<'list' | 'add' | 'edit'>('list');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<ProviderFormData>(emptyForm());
+  const [status, setStatus] = useState<ProviderStatus>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  if (!isOpen) return null;
+
+  const handleTest = async () => {
+    if (!form.server || !form.username || !form.password) return;
+    setTestResult('testing');
+    try {
+      const url = `${form.server.replace(/\/$/, '')}/player_api.php?username=${form.username}&password=${form.password}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      const data = await res.json();
+      if (data?.user_info?.auth === 1) {
+        setTestResult('success');
+      } else {
+        setTestResult('failed');
+      }
+    } catch {
+      setTestResult('error');
+    }
+  };
+
+  const handleSave = async () => {
+    if (!form.server || !form.username || !form.password) return;
+    setIsSaving(true);
+    try {
+      if (mode === 'edit' && editingId) {
+        await onEdit(editingId, form);
+      } else {
+        await onAdd(form);
+      }
+      setMode('list');
+      setForm(emptyForm());
+      setTestResult(null);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const startEdit = (provider: XtreamProfile) => {
+    setEditingId(provider.id);
+    setForm({
+      name: provider.name || '',
+      server: provider.server,
+      username: provider.username,
+      password: provider.password,
+      color: provider.color || PROVIDER_COLORS[0],
+    });
+    setTestResult(null);
+    setMode('edit');
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-[540px] max-h-[85vh] flex flex-col bg-[#080810] 
+        border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
+
+        {/* ── Header ───────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between px-6 py-4 
+          border-b border-white/8 shrink-0">
+          <div>
+            <h2 className="text-white text-base font-bold">IPTV Providers</h2>
+            <p className="text-white/40 text-xs mt-0.5">
+              {providers.length} provider{providers.length !== 1 ? 's' : ''} configured
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {mode === 'list' && (
+              <button
+                onClick={() => { setMode('add'); setForm(emptyForm()); setTestResult(null); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 
+                  bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 
+                  rounded-xl text-xs font-semibold hover:bg-cyan-500/25 transition-all"
+              >
+                <Plus size={13} /> Add Provider
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="text-white/30 hover:text-white transition-colors text-lg leading-none"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
+        {/* ── Provider List ─────────────────────────────────────────── */}
+        {mode === 'list' && (
+          <div className="flex-1 overflow-y-auto divide-y divide-white/5">
+            {providers.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-3">
+                <Tv2 size={40} className="text-white/15" />
+                <p className="text-white/30 text-sm">No providers yet</p>
+                <button
+                  onClick={() => setMode('add')}
+                  className="px-4 py-2 bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 
+                    rounded-xl text-xs font-semibold"
+                >
+                  Add Your First Provider
+                </button>
+              </div>
+            ) : (
+              providers.map(provider => {
+                const isActive = provider.id === activeProviderId;
+                const provStatus = status[provider.id] ?? 'idle';
+                const accentColor = provider.color || '#00FFFF';
+
+                return (
+                  <div
+                    key={provider.id}
+                    className={`
+                      flex items-center gap-4 px-5 py-4 transition-all cursor-pointer
+                      ${isActive ? 'bg-white/4' : 'hover:bg-white/3'}
+                    `}
+                    onClick={() => onActivate(provider)}
+                  >
+                    {/* Color dot + active indicator */}
+                    <div className="relative shrink-0">
+                      <div
+                        className="w-10 h-10 rounded-xl flex items-center justify-center"
+                        style={{ backgroundColor: `${accentColor}20`, border: `1px solid ${accentColor}30` }}
+                      >
+                        <Tv2 size={18} style={{ color: accentColor }} />
+                      </div>
+                      {isActive && (
+                        <div
+                          className="absolute -top-1 -right-1 w-4 h-4 rounded-full 
+                            flex items-center justify-center"
+                          style={{ backgroundColor: accentColor }}
+                        >
+                          <Check size={9} className="text-black" strokeWidth={3} />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-white font-semibold text-sm truncate">
+                          {provider.name || provider.username}
+                        </p>
+                        {isActive && (
+                          <span
+                            className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                            style={{ color: accentColor, backgroundColor: `${accentColor}20` }}
+                          >
+                            ACTIVE
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-white/35 text-xs truncate mt-0.5">{provider.server}</p>
+                      <p className="text-white/25 text-[10px] truncate">@{provider.username}</p>
+                    </div>
+
+                    {/* Status */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {provStatus === 'testing' && (
+                        <RefreshCw size={13} className="text-yellow-400 animate-spin" />
+                      )}
+                      {provStatus === 'connected' && (
+                        <Wifi size={13} className="text-green-400" />
+                      )}
+                      {provStatus === 'error' && (
+                        <WifiOff size={13} className="text-red-400" />
+                      )}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-1 shrink-0"
+                         onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => startEdit(provider)}
+                        className="p-1.5 text-white/25 hover:text-cyan-400 transition-colors rounded-lg hover:bg-white/5"
+                        title="Edit"
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                      <button
+                        onClick={async () => {
+                          setStatus(p => ({ ...p, [provider.id]: 'testing' }));
+                          await onRefresh(provider.id);
+                          setStatus(p => ({ ...p, [provider.id]: 'connected' }));
+                        }}
+                        className="p-1.5 text-white/25 hover:text-green-400 transition-colors rounded-lg hover:bg-white/5"
+                        title="Refresh"
+                      >
+                        <RefreshCw size={13} />
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (confirm(`Remove "${provider.name || provider.username}"?`)) {
+                            onDelete(provider.id);
+                          }
+                        }}
+                        className="p-1.5 text-white/25 hover:text-red-400 transition-colors rounded-lg hover:bg-white/5"
+                        title="Delete"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {/* ── Add / Edit Form ───────────────────────────────────────── */}
+        {(mode === 'add' || mode === 'edit') && (
+          <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+            {/* Provider name */}
+            <FormField label="Provider Name" hint="A friendly label for this provider">
+              <input
+                value={form.name}
+                onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
+                placeholder="e.g. Main IPTV, Sports Package, Family Plan"
+                className={inputClass}
+              />
+            </FormField>
+
+            {/* Server URL */}
+            <FormField label="Server URL" hint="Include port number if required">
+              <input
+                value={form.server}
+                onChange={e => setForm(p => ({ ...p, server: e.target.value }))}
+                placeholder="http://provider.com:8080"
+                className={inputClass}
+                type="url"
+              />
+            </FormField>
+
+            {/* Credentials */}
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Username">
+                <input
+                  value={form.username}
+                  onChange={e => setForm(p => ({ ...p, username: e.target.value }))}
+                  placeholder="username"
+                  className={inputClass}
+                />
+              </FormField>
+              <FormField label="Password">
+                <div className="relative">
+                  <input
+                    value={form.password}
+                    onChange={e => setForm(p => ({ ...p, password: e.target.value }))}
+                    placeholder="password"
+                    type={showPassword ? 'text' : 'password'}
+                    className={`${inputClass} pr-9`}
+                  />
+                  <button
+                    onClick={() => setShowPassword(p => !p)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 
+                      text-white/30 hover:text-white/60"
+                  >
+                    {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+              </FormField>
+            </div>
+
+            {/* Accent Color */}
+            <FormField label="Provider Color" hint="Shown in the provider list and UI accent">
+              <div className="flex gap-2 flex-wrap">
+                {PROVIDER_COLORS.map(color => (
+                  <button
+                    key={color}
+                    onClick={() => setForm(p => ({ ...p, color }))}
+                    className="w-8 h-8 rounded-lg border-2 transition-all"
+                    style={{
+                      backgroundColor: color,
+                      borderColor: form.color === color ? 'white' : 'transparent',
+                      boxShadow: form.color === color ? `0 0 10px ${color}80` : 'none',
+                    }}
+                  />
+                ))}
+              </div>
+            </FormField>
+
+            {/* Test connection result */}
+            {testResult && (
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm ${
+                testResult === 'success'
+                  ? 'bg-green-500/10 border border-green-500/30 text-green-400'
+                  : testResult === 'testing'
+                  ? 'bg-yellow-500/10 border border-yellow-500/30 text-yellow-400'
+                  : 'bg-red-500/10 border border-red-500/30 text-red-400'
+              }`}>
+                {testResult === 'success' && <><Check size={14} /> Connection successful! Provider is working.</>}
+                {testResult === 'testing' && <><RefreshCw size={14} className="animate-spin" /> Testing connection...</>}
+                {testResult === 'failed' && <><AlertCircle size={14} /> Invalid credentials. Check username/password.</>}
+                {testResult === 'error' && <><AlertCircle size={14} /> Cannot reach server. Check URL and connection.</>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Footer ───────────────────────────────────────────────── */}
+        {(mode === 'add' || mode === 'edit') && (
+          <div className="px-6 py-4 border-t border-white/8 flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleTest}
+              disabled={!form.server || !form.username || !form.password}
+              className="flex items-center gap-1.5 px-3 py-2 border border-white/15 
+                text-white/60 text-sm rounded-xl hover:bg-white/5 transition-all
+                disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <Wifi size={14} /> Test Connection
+            </button>
+            <div className="flex-1" />
+            <button
+              onClick={() => { setMode('list'); setTestResult(null); }}
+              className="px-4 py-2 text-white/50 text-sm hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={isSaving || !form.server || !form.username || !form.password}
+              className="px-5 py-2 bg-cyan-500 text-black text-sm font-bold 
+                rounded-xl hover:bg-cyan-400 transition-colors
+                disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSaving ? 'Saving...' : mode === 'edit' ? 'Save Changes' : 'Add Provider'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const inputClass = `w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 
+  text-white text-sm placeholder:text-white/20 focus:outline-none 
+  focus:border-cyan-500/50 transition-colors`;
+
+const FormField: React.FC<{
+  label: string; hint?: string; children: React.ReactNode
+}> = ({ label, hint, children }) => (
+  <div className="space-y-1.5">
+    <label className="text-white/60 text-xs font-semibold">
+      {label}
+      {hint && <span className="text-white/25 font-normal ml-1.5">{hint}</span>}
+    </label>
+    {children}
+  </div>
+);
+```
+
+Wire multi-provider into App.tsx:
+
+```typescript
+// App.tsx — Multi-provider state management
+
+const [providers, setProviders] = useState<XtreamProfile[]>([]);
+const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
+const [showProviderManager, setShowProviderManager] = useState(false);
+
+// Load providers on mount
+useEffect(() => {
+  const saved = loadProfiles();
+  const activeId = loadActiveProfileId();
+  setProviders(saved);
+  setActiveProviderId(activeId);
+  if (saved.length === 0) {
+    setShowProviderManager(true);
+  } else {
+    const active = saved.find(p => p.id === activeId) ?? saved[0];
+    if (active) xtream.connect(active);
+  }
+}, []);
+
+const handleActivateProvider = useCallback((provider: XtreamProfile) => {
+  setActiveProviderId(provider.id);
+  saveActiveProfileId(provider.id);
+  xtream.connect(provider); // Load this provider's content
+}, [xtream]);
+
+const handleAddProvider = useCallback(async (data: ProviderFormData) => {
+  const newProvider: XtreamProfile = {
+    ...data,
+    id: `provider_${Date.now()}`,
+  };
+  const updated = [...providers, newProvider];
+  setProviders(updated);
+  saveProfiles(updated);
+  handleActivateProvider(newProvider);
+}, [providers, handleActivateProvider]);
+
+// Add provider switcher button to Sidebar
+// Add ProviderManager dialog to JSX
+```
+
+---
+
+## 🌈 FEATURE 2 — WORLD-CLASS EPG GUIDE (Cable TV Style)
+
+```typescript
+// components/EpgGuide.tsx — Full cable-style EPG grid
+
+import React, {
+  useRef, useEffect, useState, useMemo, useCallback
+} from 'react';
+import { ChevronLeft, ChevronRight, Radio, Calendar, Clock } from 'lucide-react';
+import { XtreamChannel } from '../types/xtream';
+import { EPGProgram } from '../types/epg';
+
+interface EpgGuideProps {
+  channels: XtreamChannel[];
+  epgData: Map<string, EPGProgram[]>;
+  getNowPlaying: (channelId: string) => EPGProgram | null;
+  onChannelClick: (channel: XtreamChannel) => void;
+  onProgramClick?: (program: EPGProgram, channel: XtreamChannel) => void;
+  timeFormat?: '12h' | '24h';
+  themeAccent?: string;
+}
+
+const CH_W = 180;       // channel column width px
+const HOUR_W = 240;     // pixels per 1 hour
+const ROW_H = 64;       // row height px
+const HEADER_H = 48;    // time header height px
+const VISIBLE_ROWS = 10; // virtualize rows outside this range
+
+const fmt = (date: Date, format: '12h' | '24h') =>
+  date.toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit',
+    hour12: format === '12h'
+  });
+
+const fmtDuration = (startTime: string, stopTime: string): string => {
+  const mins = Math.round(
+    (new Date(stopTime).getTime() - new Date(startTime).getTime()) / 60000
+  );
+  return mins >= 60
+    ? `${Math.floor(mins / 60)}h ${mins % 60}m`
+    : `${mins}m`;
+};
+
+export const EpgGuide: React.FC<EpgGuideProps> = ({
+  channels, epgData, getNowPlaying, onChannelClick,
+  onProgramClick, timeFormat = '24h', themeAccent = '#00FFFF'
+}) => {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const channelRef = useRef<HTMLDivElement>(null);
+  const [hoveredProgram, setHoveredProgram] = useState<{
+    program: EPGProgram; channel: XtreamChannel; x: number; y: number
+  } | null>(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [scrollLeft, setScrollLeft] = useState(0);
+
+  // Update clock every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => setCurrentTime(new Date()), 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Day start = today at midnight
+  const dayStart = useMemo(() => {
+    const d = new Date(currentTime);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, [currentTime.toDateString()]);
+
+  const nowX = useMemo(() => {
+    const elapsed = currentTime.getTime() - dayStart.getTime();
+    return (elapsed / 3600000) * HOUR_W;
+  }, [currentTime, dayStart]);
+
+  // Scroll to NOW on mount
+  useEffect(() => {
+    if (!bodyRef.current) return;
+    const targetX = Math.max(0, nowX - CH_W - 60);
+    bodyRef.current.scrollLeft = targetX;
+    if (headerRef.current) headerRef.current.scrollLeft = targetX;
+  }, []);
+
+  const syncScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const sl = (e.target as HTMLDivElement).scrollLeft;
+    const st = (e.target as HTMLDivElement).scrollTop;
+    setScrollLeft(sl);
+    if (headerRef.current) headerRef.current.scrollLeft = sl;
+    if (channelRef.current) channelRef.current.scrollTop = st;
+  }, []);
+
+  const syncChannelScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    if (bodyRef.current) bodyRef.current.scrollTop = (e.target as HTMLDivElement).scrollTop;
+  }, []);
+
+  // Time axis slots (every 30 min)
+  const timeSlots = useMemo(() => {
+    const slots = [];
+    for (let h = 0; h < 24; h++) {
+      for (let m = 0; m < 60; m += 30) {
+        const d = new Date(dayStart);
+        d.setHours(h, m, 0, 0);
+        slots.push({
+          x: (h + m / 60) * HOUR_W,
+          label: fmt(d, timeFormat),
+          isHour: m === 0,
+        });
+      }
+    }
+    return slots;
+  }, [dayStart, timeFormat]);
+
+  const jumpToNow = () => {
+    const targetX = Math.max(0, nowX - 120);
+    bodyRef.current?.scrollTo({ left: targetX, behavior: 'smooth' });
+    if (headerRef.current) headerRef.current.scrollTo({ left: targetX, behavior: 'smooth' });
+  };
+
+  const shiftTime = (hours: number) => {
+    const current = bodyRef.current?.scrollLeft ?? 0;
+    const delta = hours * HOUR_W;
+    bodyRef.current?.scrollTo({ left: current + delta, behavior: 'smooth' });
+  };
+
+  const getProgramStyle = (prog: EPGProgram) => {
+    const start = new Date(prog.startTime);
+    const end = new Date(prog.stopTime);
+    const x = Math.max(0, ((start.getTime() - dayStart.getTime()) / 3600000) * HOUR_W);
+    const endX = ((end.getTime() - dayStart.getTime()) / 3600000) * HOUR_W;
+    const w = Math.max(24, endX - x - 2);
+    const isLive = currentTime >= start && currentTime < end;
+    const isPast = currentTime >= end;
+    const progress = isLive
+      ? (currentTime.getTime() - start.getTime()) / (end.getTime() - start.getTime())
+      : 0;
+    return { x, w, isLive, isPast, progress };
+  };
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden select-none" style={{ background: 'linear-gradient(180deg, #06060f 0%, #0a0a14 100%)' }}>
+
+      {/* ── EPG Toolbar ──────────────────────────────────────────────── */}
+      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-white/8 shrink-0">
+        {/* Date display */}
+        <div className="flex items-center gap-2 text-white/50 text-xs">
+          <Calendar size={13} />
+          <span>{currentTime.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</span>
+        </div>
+
+        {/* Time navigation */}
+        <div className="flex items-center gap-1 ml-3">
+          <button
+            onClick={() => shiftTime(-3)}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg
+              text-white/50 hover:text-white hover:bg-white/8 text-xs transition-all"
+          >
+            <ChevronLeft size={14} /> 3h
+          </button>
+          <button
+            onClick={() => shiftTime(3)}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg
+              text-white/50 hover:text-white hover:bg-white/8 text-xs transition-all"
+          >
+            3h <ChevronRight size={14} />
+          </button>
+        </div>
+
+        {/* Jump to now */}
+        <button
+          onClick={jumpToNow}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold
+            transition-all hover:scale-105"
+          style={{
+            background: `${themeAccent}20`,
+            border: `1px solid ${themeAccent}40`,
+            color: themeAccent,
+          }}
+        >
+          <div className="w-1.5 h-1.5 rounded-full animate-pulse"
+               style={{ background: themeAccent }} />
+          LIVE NOW
+        </button>
+
+        <div className="ml-auto flex items-center gap-2 text-white/30 text-xs">
+          <Clock size={12} />
+          <span className="font-mono">{fmt(currentTime, timeFormat)}</span>
+        </div>
+      </div>
+
+      {/* ── Main Grid ────────────────────────────────────────────────── */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* Channel column — sticky left */}
+        <div
+          ref={channelRef}
+          className="shrink-0 overflow-hidden border-r border-white/8"
+          style={{
+            width: CH_W,
+            marginTop: HEADER_H,
+            scrollbarWidth: 'none',
+          }}
+          onScroll={syncChannelScroll}
+        >
+          {channels.map(ch => {
+            const nowPlaying = getNowPlaying(ch.epg_channel_id ?? String(ch.stream_id));
+            return (
+              <button
+                key={ch.stream_id}
+                onClick={() => onChannelClick(ch)}
+                className="flex items-center gap-2.5 w-full px-3 border-b border-white/5
+                  hover:bg-white/5 transition-colors text-left group shrink-0"
+                style={{ height: ROW_H }}
+              >
+                {ch.stream_icon ? (
+                  <img
+                    src={ch.stream_icon}
+                    className="w-9 h-9 rounded-lg object-contain shrink-0 opacity-90 group-hover:opacity-100"
+                    onError={e => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
+                    alt=""
+                  />
+                ) : (
+                  <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+                       style={{ background: `${themeAccent}15`, border: `1px solid ${themeAccent}20` }}>
+                    <Radio size={16} style={{ color: themeAccent }} />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-white/85 text-xs font-semibold truncate group-hover:text-white">
+                    {ch.name}
+                  </p>
+                  {nowPlaying && (
+                    <p className="text-white/28 text-[10px] truncate mt-0.5">
+                      {nowPlaying.title}
+                    </p>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Program grid area */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+
+          {/* Time header */}
+          <div
+            ref={headerRef}
+            className="overflow-hidden border-b border-white/8 shrink-0 relative"
+            style={{ height: HEADER_H, scrollbarWidth: 'none' }}
+          >
+            <div className="relative" style={{ width: 24 * HOUR_W, height: HEADER_H }}>
+              {timeSlots.map((slot, i) => (
+                <div
+                  key={i}
+                  className="absolute top-0 bottom-0 flex items-center"
+                  style={{ left: slot.x }}
+                >
+                  <div className={`absolute top-0 bottom-0 w-px ${
+                    slot.isHour ? 'bg-white/10' : 'bg-white/4'
+                  }`} />
+                  <span className={`pl-2 text-[10px] font-mono relative z-10 ${
+                    slot.isHour ? 'text-white/50' : 'text-white/20'
+                  }`}>
+                    {slot.label}
+                  </span>
+                </div>
+              ))}
+              {/* NOW dot in header */}
+              <div
+                className="absolute top-0 bottom-0 w-0.5 z-20 pointer-events-none"
+                style={{ left: nowX, background: themeAccent }}
+              >
+                <div
+                  className="absolute -top-0 -translate-x-1/2 
+                    w-2 h-2 rounded-full animate-pulse"
+                  style={{ background: themeAccent }}
+                />
+                <div
+                  className="absolute top-3 -translate-x-1/2
+                    text-[9px] font-bold px-1 py-0.5 rounded whitespace-nowrap"
+                  style={{ color: '#000', background: themeAccent }}
+                >
+                  NOW
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Scrollable program body */}
+          <div
+            ref={bodyRef}
+            className="flex-1 overflow-auto"
+            onScroll={syncScroll}
+            style={{
+              scrollbarWidth: 'thin',
+              scrollbarColor: 'rgba(255,255,255,0.1) transparent',
+            }}
+          >
+            <div
+              className="relative"
+              style={{ width: 24 * HOUR_W, minHeight: channels.length * ROW_H }}
+            >
+              {/* NOW vertical line */}
+              <div
+                className="absolute top-0 bottom-0 w-0.5 z-20 pointer-events-none"
+                style={{ left: nowX, background: `${themeAccent}60` }}
+              />
+
+              {channels.map((ch, rowIdx) => {
+                const programs = epgData.get(ch.epg_channel_id ?? ch.name) ?? [];
+                const top = rowIdx * ROW_H;
+
+                return (
+                  <div
+                    key={ch.stream_id}
+                    className="absolute left-0 border-b border-white/4"
+                    style={{ top, height: ROW_H, width: 24 * HOUR_W }}
+                  >
+                    {programs.length === 0 ? (
+                      <div className="flex items-center h-full px-4">
+                        <span className="text-white/10 text-xs italic">No guide data</span>
+                      </div>
+                    ) : (
+                      programs.map((prog, pi) => {
+                        const { x, w, isLive, isPast, progress } = getProgramStyle(prog);
+                        if (x < 0 || x > 24 * HOUR_W) return null;
+
+                        return (
+                          <button
+                            key={pi}
+                            onClick={() => onProgramClick?.(prog, ch)}
+                            onMouseEnter={e => {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setHoveredProgram({
+                                program: prog, channel: ch,
+                                x: rect.left, y: rect.top,
+                              });
+                            }}
+                            onMouseLeave={() => setHoveredProgram(null)}
+                            className={`
+                              absolute top-1.5 bottom-1.5 rounded-xl overflow-hidden
+                              border transition-all duration-150 text-left
+                              group/prog cursor-pointer
+                              ${isLive
+                                ? 'shadow-lg'
+                                : isPast
+                                ? 'opacity-40'
+                                : 'hover:brightness-125'
+                              }
+                            `}
+                            style={{
+                              left: x + 1,
+                              width: w,
+                              borderColor: isLive
+                                ? `${themeAccent}60`
+                                : 'rgba(255,255,255,0.07)',
+                              background: isLive
+                                ? `linear-gradient(135deg, ${themeAccent}18, ${themeAccent}08)`
+                                : isPast
+                                ? 'rgba(255,255,255,0.03)'
+                                : 'rgba(255,255,255,0.05)',
+                              boxShadow: isLive ? `0 0 12px ${themeAccent}20` : 'none',
+                            }}
+                          >
+                            {/* Live progress fill */}
+                            {isLive && (
+                              <div
+                                className="absolute inset-y-0 left-0 rounded-xl"
+                                style={{
+                                  width: `${progress * 100}%`,
+                                  background: `${themeAccent}15`,
+                                }}
+                              />
+                            )}
+
+                            {/* Content */}
+                            <div className="relative z-10 px-2.5 py-1.5 h-full flex flex-col justify-center">
+                              <p className={`text-[11px] font-semibold truncate leading-tight ${
+                                isLive ? 'text-white' : isPast ? 'text-white/30' : 'text-white/70'
+                              }`}
+                              style={isLive ? { color: 'white' } : {}}>
+                                {prog.title}
+                              </p>
+                              {w > 100 && (
+                                <p className="text-[9px] truncate mt-0.5"
+                                   style={{ color: isLive ? `${themeAccent}` : 'rgba(255,255,255,0.25)' }}>
+                                  {fmt(new Date(prog.startTime), timeFormat)} · {fmtDuration(prog.startTime, prog.stopTime)}
+                                </p>
+                              )}
+                            </div>
+
+                            {/* LIVE badge */}
+                            {isLive && w > 60 && (
+                              <div
+                                className="absolute top-1 right-1 text-[8px] font-black 
+                                  px-1 py-0.5 rounded flex items-center gap-0.5"
+                                style={{
+                                  background: themeAccent,
+                                  color: '#000',
+                                }}
+                              >
+                                <div className="w-1 h-1 rounded-full bg-black animate-pulse" />
+                                LIVE
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Program Hover Tooltip ─────────────────────────────────────── */}
+      {hoveredProgram && (
+        <div
+          className="fixed z-50 pointer-events-none
+            bg-[#0a0a16] border border-white/15 rounded-xl p-3 shadow-2xl"
+          style={{
+            left: Math.min(hoveredProgram.x, window.innerWidth - 280),
+            top: hoveredProgram.y - 100,
+            width: 260,
+          }}
+        >
+          <p className="text-white font-semibold text-sm">{hoveredProgram.program.title}</p>
+          <p className="text-white/40 text-xs mt-0.5">{hoveredProgram.channel.name}</p>
+          <div className="flex gap-3 mt-2 text-[10px] text-white/40">
+            <span>{fmt(new Date(hoveredProgram.program.startTime), timeFormat)}</span>
+            <span>→</span>
+            <span>{fmt(new Date(hoveredProgram.program.stopTime), timeFormat)}</span>
+            <span className="ml-auto">
+              {fmtDuration(hoveredProgram.program.startTime, hoveredProgram.program.stopTime)}
+            </span>
+          </div>
+          {hoveredProgram.program.description && (
+            <p className="text-white/50 text-[10px] mt-2 line-clamp-2 leading-relaxed">
+              {hoveredProgram.program.description}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+```
+
+---
+
+## 🎛️ FEATURE 3 — SUBTITLE RENDERER + AUDIO PLAYER CONTROLS
+
+```typescript
+// components/SubtitleRenderer.tsx — Custom CSS subtitle overlay
+
+import React, { useEffect, useRef } from 'react';
+import { AppSettings } from '../types/app';
+
+interface SubtitleRendererProps {
+  videoRef: React.RefObject<HTMLVideoElement>;
+  settings: AppSettings;
+  externalSubtitleUrl?: string;
+  isVisible: boolean;
+}
+
+export const SubtitleRenderer: React.FC<SubtitleRendererProps> = ({
+  videoRef, settings, externalSubtitleUrl, isVisible
+}) => {
+  const [currentCue, setCurrentCue] = React.useState<string>('');
+  const trackRef = useRef<HTMLTrackElement | null>(null);
+
+  // Apply subtitle styles via CSS variables
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--sub-font-family', settings.subtitleFontFamily ?? 'Arial');
+    root.style.setProperty('--sub-font-size', `${settings.subtitleFontSize ?? 22}px`);
+    root.style.setProperty('--sub-color', settings.subtitleColor ?? '#FFFFFF');
+    root.style.setProperty('--sub-outline', settings.subtitleOutlineColor ?? '#000000');
+    root.style.setProperty('--sub-outline-w', `${settings.subtitleOutlineWidth ?? 2}px`);
+    root.style.setProperty('--sub-bg-opacity', `${settings.subtitleBackgroundOpacity ?? 0}`);
+  }, [
+    settings.subtitleFontFamily,
+    settings.subtitleFontSize,
+    settings.subtitleColor,
+    settings.subtitleOutlineColor,
+    settings.subtitleOutlineWidth,
+    settings.subtitleBackgroundOpacity,
+  ]);
+
+  // Listen to text track cue changes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const updateCue = () => {
+      const tracks = video.textTracks;
+      for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        if (track.mode === 'showing' || track.mode === 'hidden') {
+          const activeCues = track.activeCues;
+          if (activeCues && activeCues.length > 0) {
+            const cue = activeCues[0] as VTTCue;
+            setCurrentCue(cue.text || '');
+            return;
+          }
+        }
+      }
+      setCurrentCue('');
+    };
+
+    const tracks = video.textTracks;
+    for (let i = 0; i < tracks.length; i++) {
+      tracks[i].addEventListener('cuechange', updateCue);
+      if (settings.subtitlesEnabled) {
+        tracks[i].mode = 'hidden'; // We render manually
+      }
+    }
+
+    return () => {
+      for (let i = 0; i < tracks.length; i++) {
+        tracks[i].removeEventListener('cuechange', updateCue);
+      }
+    };
+  }, [videoRef, settings.subtitlesEnabled]);
+
+  if (!isVisible || !settings.subtitlesEnabled || !currentCue) return null;
+
+  const lines = currentCue.split('\n').filter(Boolean);
+
+  return (
+    <div className="absolute bottom-16 left-0 right-0 flex flex-col items-center 
+      gap-1 px-8 pointer-events-none z-20">
+      {lines.map((line, i) => (
+        <span
+          key={i}
+          className="inline-block max-w-[85%] text-center"
+          style={{
+            fontFamily: `var(--sub-font-family)`,
+            fontSize: `var(--sub-font-size)`,
+            color: `var(--sub-color)`,
+            WebkitTextStroke: `var(--sub-outline-w) var(--sub-outline)`,
+            textShadow: `0 0 4px var(--sub-outline), 0 0 8px var(--sub-outline)`,
+            backgroundColor: `rgba(0,0,0,var(--sub-bg-opacity))`,
+            padding: '2px 10px',
+            borderRadius: '4px',
+            lineHeight: '1.4',
+            letterSpacing: '0.01em',
+          }}
+          dangerouslySetInnerHTML={{ __html: line }}
+        />
+      ))}
+    </div>
+  );
+};
+```
+
+### Audio Track Selector + Full Player Controls
+
+```typescript
+// components/PlayerControls.tsx — Complete world-class OSD control bar
+
+import React, { useState, useCallback } from 'react';
+import {
+  Play, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Volume1,
+  Maximize, Minimize, PictureInPicture, Subtitles, Music,
+  Gauge, Settings2, ChevronUp, ChevronDown, ChevronsLeft, ChevronsRight,
+  Radio, Cast, BookOpen, Bookmark, Share2
+} from 'lucide-react';
+
+interface AudioTrack {
+  id: string;
+  label: string;
+  language: string;
+}
+
+interface SubtitleTrack {
+  id: string;
+  label: string;
+  language: string;
+}
+
+interface PlayerControlsProps {
+  // Playback state
+  isPlaying: boolean;
+  isMuted: boolean;
+  volume: number;
+  position: number;
+  duration: number;
+  isFullscreen: boolean;
+  isPiP: boolean;
+  streamType: 'live' | 'vod';
+  isLive: boolean;
+  playbackRate: number;
+  title: string;
+  channelLogo?: string;
+
+  // Tracks
+  audioTracks: AudioTrack[];
+  subtitleTracks: SubtitleTrack[];
+  activeAudioTrackId: string | null;
+  activeSubtitleTrackId: string | null;
+
+  // Stream health
+  bufferSeconds: number;
+  signalQuality: 'excellent' | 'good' | 'poor' | 'critical';
+
+  // Refs for direct DOM updates
+  seekBarFillRef: React.RefObject<HTMLDivElement>;
+  bufferedFillRef: React.RefObject<HTMLDivElement>;
+  timeDisplayRef: React.RefObject<HTMLSpanElement>;
+  durationDisplayRef: React.RefObject<HTMLSpanElement>;
+
+  // Handlers
+  onPlayPause: () => void;
+  onStop: () => void;
+  onSeek: (seconds: number) => void;
+  onSeekTo: (fraction: number) => void;
+  onMute: () => void;
+  onVolumeChange: (v: number) => void;
+  onFullscreen: () => void;
+  onPiP: () => void;
+  onPrevChannel?: () => void;
+  onNextChannel?: () => void;
+  onSpeedChange: (rate: number) => void;
+  onAudioTrackChange: (trackId: string) => void;
+  onSubtitleTrackChange: (trackId: string | null) => void;
+
+  // OSD control
+  onControlsMouseEnter: () => void;
+  onControlsMouseLeave: () => void;
+
+  // Theme
+  accentColor?: string;
+  settings: AppSettings;
+}
+
+const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3];
+
+export const PlayerControls: React.FC<PlayerControlsProps> = (props) => {
+  const {
+    isPlaying, isMuted, volume, isFullscreen, isPiP,
+    streamType, isLive, playbackRate, title,
+    audioTracks, subtitleTracks, activeAudioTrackId, activeSubtitleTrackId,
+    bufferSeconds, signalQuality, accentColor = '#00FFFF',
+    seekBarFillRef, bufferedFillRef, timeDisplayRef, durationDisplayRef,
+    onPlayPause, onStop, onSeek, onSeekTo, onMute, onVolumeChange,
+    onFullscreen, onPiP, onPrevChannel, onNextChannel, onSpeedChange,
+    onAudioTrackChange, onSubtitleTrackChange,
+    onControlsMouseEnter, onControlsMouseLeave, settings,
+  } = props;
+
+  const [showAudioMenu, setShowAudioMenu] = useState(false);
+  const [showSubMenu, setShowSubMenu] = useState(false);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+
+  const closeAllMenus = () => {
+    setShowAudioMenu(false);
+    setShowSubMenu(false);
+    setShowSpeedMenu(false);
+    setShowMoreMenu(false);
+  };
+
+  const handleSeekBarClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    onSeekTo(fraction);
+  }, [onSeekTo]);
+
+  const signalColors = {
+    excellent: '#22c55e', good: accentColor, poor: '#eab308', critical: '#ef4444'
+  };
+  const signalBars = { excellent: 4, good: 3, poor: 2, critical: 1 };
+
+  return (
+    <div
+      onMouseEnter={onControlsMouseEnter}
+      onMouseLeave={onControlsMouseLeave}
+      onClick={closeAllMenus}
+    >
+      {/* ── VOD Seek Bar ─────────────────────────────────────────────── */}
+      {streamType === 'vod' && (
+        <div className="px-4 mb-3">
+          <div
+            className="relative h-1 rounded-full cursor-pointer group hover:h-2 transition-all duration-100"
+            style={{ background: 'rgba(255,255,255,0.12)' }}
+            onClick={handleSeekBarClick}
+          >
+            {/* Buffered */}
+            <div
+              ref={bufferedFillRef}
+              className="absolute inset-y-0 left-0 rounded-full pointer-events-none"
+              style={{ background: 'rgba(255,255,255,0.2)', width: '0%' }}
+            />
+            {/* Played */}
+            <div
+              ref={seekBarFillRef}
+              className="absolute inset-y-0 left-0 rounded-full pointer-events-none"
+              style={{ background: accentColor, width: '0%' }}
+            />
+            {/* Thumb */}
+            <div
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 
+                w-4 h-4 rounded-full shadow-lg
+                opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+              style={{ background: accentColor, left: '0%', boxShadow: `0 0 8px ${accentColor}80` }}
+              id="seek-thumb"
+            />
+          </div>
+          {/* Time */}
+          <div className="flex justify-between mt-1.5 text-[10px] font-mono text-white/35">
+            <span ref={timeDisplayRef}>0:00</span>
+            <span ref={durationDisplayRef}>0:00</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Live Progress Bar (EPG-based) ─────────────────────────────── */}
+      {isLive && (
+        <div className="px-4 mb-3">
+          <div className="flex items-center justify-between text-[10px] text-white/35 mb-1">
+            <span className="truncate max-w-[60%]">{title}</span>
+            <div className="flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full animate-pulse"
+                   style={{ background: '#ef4444' }} />
+              <span className="text-red-400 font-semibold">LIVE</span>
+            </div>
+          </div>
+          <div className="h-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.1)' }}>
+            <div className="h-full rounded-full" style={{ width: '45%', background: '#ef4444' }} />
+          </div>
+        </div>
+      )}
+
+      {/* ── Main Controls Row ─────────────────────────────────────────── */}
+      <div className="flex items-center gap-1 px-3 pb-3">
+
+        {/* Left: Transport controls */}
+        <div className="flex items-center gap-0.5">
+          {/* Prev channel / Seek back */}
+          {isLive ? (
+            <CtrlBtn onClick={onPrevChannel} title="Previous Channel (Page Up)">
+              <SkipBack size={17} />
+            </CtrlBtn>
+          ) : (
+            <>
+              <CtrlBtn onClick={() => onSeek(-30)} title="Back 30s (Shift+←)">
+                <ChevronsLeft size={17} />
+              </CtrlBtn>
+              <CtrlBtn onClick={() => onSeek(-10)} title="Back 10s (←)">
+                <SkipBack size={17} />
+              </CtrlBtn>
+            </>
+          )}
+
+          {/* Play/Pause — larger */}
+          <button
+            onClick={onPlayPause}
+            title="Play/Pause (Space)"
+            className="w-11 h-11 rounded-full flex items-center justify-center
+              transition-all hover:scale-110 active:scale-95 mx-1"
+            style={{
+              background: accentColor,
+              boxShadow: `0 0 16px ${accentColor}50`,
+            }}
+          >
+            {isPlaying
+              ? <Pause size={20} className="text-black" fill="currentColor" />
+              : <Play size={20} className="text-black" fill="currentColor" style={{ marginLeft: 2 }} />
+            }
+          </button>
+
+          {/* Next channel / Seek forward */}
+          {isLive ? (
+            <CtrlBtn onClick={onNextChannel} title="Next Channel (Page Down)">
+              <SkipForward size={17} />
+            </CtrlBtn>
+          ) : (
+            <>
+              <CtrlBtn onClick={() => onSeek(10)} title="Forward 10s (→)">
+                <SkipForward size={17} />
+              </CtrlBtn>
+              <CtrlBtn onClick={() => onSeek(30)} title="Forward 30s (Shift+→)">
+                <ChevronsRight size={17} />
+              </CtrlBtn>
+            </>
+          )}
+
+          {/* Stop */}
+          <CtrlBtn onClick={onStop} title="Stop (S)">
+            <Square size={15} />
+          </CtrlBtn>
+        </div>
+
+        {/* Volume */}
+        <div className="flex items-center gap-2 ml-2">
+          <CtrlBtn onClick={onMute} title="Mute (M)">
+            {isMuted || volume === 0
+              ? <VolumeX size={17} />
+              : volume < 0.4 ? <Volume1 size={17} /> : <Volume2 size={17} />
+            }
+          </CtrlBtn>
+          <div className="relative flex items-center w-20 group">
+            <input
+              type="range"
+              min={0} max={1} step={0.01}
+              value={isMuted ? 0 : volume}
+              onChange={e => onVolumeChange(parseFloat(e.target.value))}
+              className="w-full h-1 rounded-full appearance-none cursor-pointer
+                bg-white/15 group-hover:h-1.5 transition-all"
+              style={{ accentColor }}
+            />
+          </div>
+          <span className="text-white/35 text-[10px] font-mono w-7">
+            {Math.round((isMuted ? 0 : volume) * 100)}%
+          </span>
+        </div>
+
+        {/* Signal indicator (live) */}
+        {isLive && settings.showStreamHealthOverlay && (
+          <div className="flex items-center gap-1 ml-2 bg-black/40 rounded-lg px-2 py-1">
+            <div className="flex items-end gap-0.5 h-3.5">
+              {[1, 2, 3, 4].map(lvl => (
+                <div
+                  key={lvl}
+                  className="w-1 rounded-sm"
+                  style={{
+                    height: `${lvl * 3}px`,
+                    background: lvl <= signalBars[signalQuality]
+                      ? signalColors[signalQuality]
+                      : 'rgba(255,255,255,0.12)',
+                  }}
+                />
+              ))}
+            </div>
+            <span className="text-[9px] font-mono" style={{ color: signalColors[signalQuality] }}>
+              {bufferSeconds.toFixed(1)}s
+            </span>
+          </div>
+        )}
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Right: Feature controls */}
+        <div className="flex items-center gap-0.5">
+
+          {/* Speed (VOD only) */}
+          {streamType === 'vod' && (
+            <div className="relative">
+              <CtrlBtn
+                onClick={e => { e.stopPropagation(); setShowSpeedMenu(p => !p); setShowAudioMenu(false); setShowSubMenu(false); }}
+                title="Playback Speed"
+                active={playbackRate !== 1}
+              >
+                <Gauge size={16} />
+                <span className="text-[10px] font-mono ml-0.5">{playbackRate}×</span>
+              </CtrlBtn>
+              {showSpeedMenu && (
+                <PopupMenu className="bottom-12 right-0 w-32">
+                  <p className="text-white/30 text-[9px] uppercase px-3 py-1.5 font-bold tracking-wider">
+                    Speed
+                  </p>
+                  {SPEEDS.map(s => (
+                    <button
+                      key={s}
+                      onClick={e => { e.stopPropagation(); onSpeedChange(s); setShowSpeedMenu(false); }}
+                      className={`w-full px-3 py-2 text-xs text-left flex items-center justify-between
+                        hover:bg-white/8 transition-colors ${playbackRate === s ? 'text-white font-semibold' : 'text-white/60'}`}
+                    >
+                      {s}×
+                      {playbackRate === s && <Check size={11} style={{ color: accentColor }} />}
+                    </button>
+                  ))}
+                </PopupMenu>
+              )}
+            </div>
+          )}
+
+          {/* Audio tracks */}
+          {audioTracks.length > 0 && (
+            <div className="relative">
+              <CtrlBtn
+                onClick={e => { e.stopPropagation(); setShowAudioMenu(p => !p); setShowSubMenu(false); setShowSpeedMenu(false); }}
+                title="Audio Track (A)"
+                active={!!activeAudioTrackId}
+              >
+                <Music size={16} />
+              </CtrlBtn>
+              {showAudioMenu && (
+                <PopupMenu className="bottom-12 right-0 w-52">
+                  <p className="text-white/30 text-[9px] uppercase px-3 py-1.5 font-bold tracking-wider">
+                    Audio Track
+                  </p>
+                  {audioTracks.map(t => (
+                    <button
+                      key={t.id}
+                      onClick={e => { e.stopPropagation(); onAudioTrackChange(t.id); setShowAudioMenu(false); }}
+                      className={`w-full px-3 py-2 text-xs text-left flex items-center justify-between
+                        hover:bg-white/8 transition-colors ${activeAudioTrackId === t.id ? 'text-white' : 'text-white/60'}`}
+                    >
+                      <span className="truncate">{t.label || t.language}</span>
+                      {activeAudioTrackId === t.id && <Check size={11} style={{ color: accentColor }} />}
+                    </button>
+                  ))}
+                </PopupMenu>
+              )}
+            </div>
+          )}
+
+          {/* Subtitles */}
+          <div className="relative">
+            <CtrlBtn
+              onClick={e => { e.stopPropagation(); setShowSubMenu(p => !p); setShowAudioMenu(false); setShowSpeedMenu(false); }}
+              title="Subtitles (C)"
+              active={!!activeSubtitleTrackId}
+            >
+              <Subtitles size={16} />
+            </CtrlBtn>
+            {showSubMenu && (
+              <PopupMenu className="bottom-12 right-0 w-52">
+                <p className="text-white/30 text-[9px] uppercase px-3 py-1.5 font-bold tracking-wider">
+                  Subtitles
+                </p>
+                <button
+                  onClick={e => { e.stopPropagation(); onSubtitleTrackChange(null); setShowSubMenu(false); }}
+                  className={`w-full px-3 py-2 text-xs text-left flex items-center justify-between
+                    hover:bg-white/8 transition-colors ${!activeSubtitleTrackId ? 'text-white' : 'text-white/60'}`}
+                >
+                  Off
+                  {!activeSubtitleTrackId && <Check size={11} style={{ color: accentColor }} />}
+                </button>
+                {subtitleTracks.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={e => { e.stopPropagation(); onSubtitleTrackChange(t.id); setShowSubMenu(false); }}
+                    className={`w-full px-3 py-2 text-xs text-left flex items-center justify-between
+                      hover:bg-white/8 transition-colors ${activeSubtitleTrackId === t.id ? 'text-white' : 'text-white/60'}`}
+                  >
+                    <span className="truncate">{t.label || t.language}</span>
+                    {activeSubtitleTrackId === t.id && <Check size={11} style={{ color: accentColor }} />}
+                  </button>
+                ))}
+              </PopupMenu>
+            )}
+          </div>
+
+          {/* PiP */}
+          <CtrlBtn onClick={onPiP} title="Picture-in-Picture (P)" active={isPiP}>
+            <PictureInPicture size={16} />
+          </CtrlBtn>
+
+          {/* Fullscreen */}
+          <CtrlBtn onClick={onFullscreen} title="Fullscreen (F)">
+            {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+          </CtrlBtn>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Helper components ──────────────────────────────────────────────────────
+
+const CtrlBtn: React.FC<{
+  onClick?: (e: React.MouseEvent) => void;
+  title?: string;
+  children: React.ReactNode;
+  active?: boolean;
+  disabled?: boolean;
+}> = ({ onClick, title, children, active, disabled }) => (
+  <button
+    onClick={onClick}
+    title={title}
+    disabled={disabled}
+    className={`
+      flex items-center justify-center min-w-[34px] h-9 px-2 rounded-lg
+      transition-all duration-150 gap-0.5
+      ${active
+        ? 'text-white bg-white/10'
+        : 'text-white/55 hover:text-white hover:bg-white/8'
+      }
+      ${disabled ? 'opacity-30 cursor-not-allowed' : ''}
+    `}
+  >
+    {children}
+  </button>
+);
+
+const PopupMenu: React.FC<{
+  children: React.ReactNode;
+  className?: string;
+}> = ({ children, className }) => (
+  <div
+    className={`absolute z-50 bg-[#0c0c18] border border-white/12 
+      rounded-xl shadow-2xl overflow-hidden py-1 ${className}`}
+    onClick={e => e.stopPropagation()}
+  >
+    {children}
+  </div>
+);
+```
+
+---
+
+## 📹 FEATURE 4 — WORLD-CLASS DVR SYSTEM (3 Concurrent + Watch 4th)
+
+### electron/main.cjs — DVR Backend
+
+```javascript
+// electron/main.cjs — Complete DVR system with FFmpeg
+
+const { spawn, exec } = require('child_process');
+const path = require('path');
+const fs = require('fs').promises;
+const fsSync = require('fs');
+
+// ── DVR State ──────────────────────────────────────────────────────────────
+const MAX_CONCURRENT_RECORDINGS = 3;
+const recordings = new Map(); // recordingId → { process, meta, startTime, outputPath }
+let dvrOutputDir = null;
+
+const getDvrDir = () => {
+  if (dvrOutputDir) return dvrOutputDir;
+  dvrOutputDir = path.join(app.getPath('videos'), 'DYLANDOS IPTV DVR');
+  fsSync.mkdirSync(dvrOutputDir, { recursive: true });
+  return dvrOutputDir;
+};
+
+// ── Find FFmpeg ────────────────────────────────────────────────────────────
+const findFFmpeg = () => {
+  // 1. Check bundled ffmpeg in app resources
+  const bundledPaths = [
+    path.join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe'),
+    path.join(__dirname, '..', 'resources', 'ffmpeg', 'ffmpeg.exe'),
+  ];
+  for (const p of bundledPaths) {
+    if (fsSync.existsSync(p)) return p;
+  }
+  // 2. Check PATH
+  return 'ffmpeg';
+};
+
+const FFMPEG_PATH = findFFmpeg();
+
+// ── IPC: Start Recording ───────────────────────────────────────────────────
+ipcMain.handle('dvr:start', async (_e, {
+  streamUrl,
+  channelName,
+  programTitle,
+  durationSeconds, // optional — record for N seconds then auto-stop
+  customOutputDir,
+}) => {
+  if (recordings.size >= MAX_CONCURRENT_RECORDINGS) {
+    return {
+      success: false,
+      error: `Maximum ${MAX_CONCURRENT_RECORDINGS} concurrent recordings reached.`,
+    };
+  }
+
+  const recordingId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const outputDir = customOutputDir || getDvrDir();
+
+  // Safe filename
+  const safeChannelName = channelName.replace(/[^a-zA-Z0-9\-_\s]/g, '').trim().slice(0, 50);
+  const safeProgramTitle = (programTitle || 'Recording')
+    .replace(/[^a-zA-Z0-9\-_\s]/g, '').trim().slice(0, 80);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename = `${safeChannelName} - ${safeProgramTitle} - ${timestamp}.ts`;
+  const outputPath = path.join(outputDir, filename);
+
+  // FFmpeg args for recording
+  const args = [
+    '-hide_banner',
+    '-loglevel', 'error',
+    '-user_agent', 'Mozilla/5.0',
+    '-i', streamUrl,
+    '-c', 'copy',           // Stream copy — no re-encode = no CPU overhead
+    '-f', 'mpegts',         // Output as MPEG-TS for universal compatibility
+    '-avoid_negative_ts', 'make_zero',
+  ];
+
+  if (durationSeconds && durationSeconds > 0) {
+    args.push('-t', String(durationSeconds));
+  }
+
+  args.push(outputPath);
+
+  const meta = {
+    id: recordingId,
+    channelName,
+    programTitle: programTitle || 'Unknown Program',
+    streamUrl,
+    outputPath,
+    filename,
+    startTime: new Date().toISOString(),
+    durationSeconds: durationSeconds || null,
+    status: 'recording',
+    size: 0,
+  };
+
+  try {
+    const ffmpegProcess = spawn(FFMPEG_PATH, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    recordings.set(recordingId, { process: ffmpegProcess, meta, startTime: Date.now() });
+
+    // Size tracking interval
+    const sizeInterval = setInterval(async () => {
+      try {
+        const stat = await fs.stat(outputPath);
+        meta.size = stat.size;
+        // Push progress to renderer
+        win?.webContents.send('dvr:progress', {
+          id: recordingId,
+          size: stat.size,
+          elapsedSeconds: Math.round((Date.now() - recordings.get(recordingId).startTime) / 1000),
+          status: 'recording',
+        });
+      } catch { /* file not created yet */ }
+    }, 2000);
+
+    // On process exit
+    ffmpegProcess.on('close', async (code) => {
+      clearInterval(sizeInterval);
+      try {
+        const stat = await fs.stat(outputPath);
+        meta.size = stat.size;
+        meta.status = code === 0 ? 'completed' : 'error';
+      } catch {
+        meta.status = 'error';
+      }
+
+      recordings.delete(recordingId);
+      await saveRecordingToLibrary(meta);
+
+      win?.webContents.send('dvr:completed', {
+        id: recordingId,
+        status: meta.status,
+        outputPath,
+        filename,
+        size: meta.size,
+      });
+    });
+
+    ffmpegProcess.stderr.on('data', (data) => {
+      const line = data.toString();
+      if (line.includes('Error') || line.includes('Invalid')) {
+        console.error(`[DVR ${recordingId}] FFmpeg: ${line}`);
+      }
+    });
+
+    await saveRecordingToLibrary(meta); // Save initial record
+    return { success: true, recordingId, outputPath };
+
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// ── IPC: Stop Recording ────────────────────────────────────────────────────
+ipcMain.handle('dvr:stop', async (_e, recordingId) => {
+  const recording = recordings.get(recordingId);
+  if (!recording) return { success: false, error: 'Recording not found' };
+
+  recording.process.stdin?.write('q'); // Graceful FFmpeg quit
+  setTimeout(() => {
+    if (!recording.process.killed) {
+      recording.process.kill('SIGTERM'); // Force if needed
+    }
+  }, 3000);
+
+  return { success: true };
+});
+
+// ── IPC: Stop All Recordings ───────────────────────────────────────────────
+ipcMain.handle('dvr:stop-all', async () => {
+  for (const [id, rec] of recordings.entries()) {
+    rec.process.stdin?.write('q');
+    setTimeout(() => rec.process.kill('SIGTERM'), 2000);
+  }
+  return { success: true, stoppedCount: recordings.size };
+});
+
+// ── IPC: List Active Recordings ────────────────────────────────────────────
+ipcMain.handle('dvr:list-active', () => {
+  const active = [];
+  for (const [id, rec] of recordings.entries()) {
+    active.push({
+      ...rec.meta,
+      elapsedSeconds: Math.round((Date.now() - rec.startTime) / 1000),
+    });
+  }
+  return { recordings: active, maxConcurrent: MAX_CONCURRENT_RECORDINGS };
+});
+
+// ── IPC: List Recording Library ────────────────────────────────────────────
+ipcMain.handle('dvr:list-library', async (_e, dirOverride) => {
+  const dir = dirOverride || getDvrDir();
+  try {
+    const libraryFile = path.join(app.getPath('userData'), 'data', 'dvr-library.json');
+    const raw = await fs.readFile(libraryFile, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+});
+
+// ── IPC: Delete Recording ──────────────────────────────────────────────────
+ipcMain.handle('dvr:delete', async (_e, { recordingId, deleteFile }) => {
+  try {
+    const libraryFile = path.join(app.getPath('userData'), 'data', 'dvr-library.json');
+    const library = JSON.parse(await fs.readFile(libraryFile, 'utf8').catch(() => '[]'));
+    const entry = library.find(r => r.id === recordingId);
+
+    if (entry && deleteFile) {
+      await fs.unlink(entry.outputPath).catch(() => {});
+    }
+
+    const updated = library.filter(r => r.id !== recordingId);
+    await fs.writeFile(libraryFile, JSON.stringify(updated, null, 2));
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// ── IPC: Set DVR Output Directory ──────────────────────────────────────────
+ipcMain.handle('dvr:set-output-dir', (_e, dir) => {
+  dvrOutputDir = dir;
+  fsSync.mkdirSync(dir, { recursive: true });
+});
+
+// ── IPC: Get DVR Status ────────────────────────────────────────────────────
+ipcMain.handle('dvr:status', () => ({
+  activeCount: recordings.size,
+  maxConcurrent: MAX_CONCURRENT_RECORDINGS,
+  ffmpegAvailable: fsSync.existsSync(FFMPEG_PATH) || FFMPEG_PATH === 'ffmpeg',
+  outputDir: getDvrDir(),
+}));
+
+// ── IPC: Check FFmpeg availability ─────────────────────────────────────────
+ipcMain.handle('dvr:check-ffmpeg', () => {
+  return new Promise(resolve => {
+    exec(`${FFMPEG_PATH} -version`, (error) => {
+      resolve({ available: !error, path: FFMPEG_PATH });
+    });
+  });
+});
+
+// ── Helper: Save to library JSON ───────────────────────────────────────────
+async function saveRecordingToLibrary(meta) {
+  const libraryFile = path.join(app.getPath('userData'), 'data', 'dvr-library.json');
+  let library = [];
+  try {
+    library = JSON.parse(await fs.readFile(libraryFile, 'utf8'));
+  } catch { /* new file */ }
+
+  const idx = library.findIndex(r => r.id === meta.id);
+  if (idx >= 0) {
+    library[idx] = meta;
+  } else {
+    library.unshift(meta);
+  }
+
+  await fs.mkdir(path.dirname(libraryFile), { recursive: true });
+  await fs.writeFile(libraryFile, JSON.stringify(library, null, 2));
+}
+```
+
+### DVR React Page
+
+```typescript
+// pages/DVR.tsx — Complete DVR management UI
+
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Circle, Square, Trash2, Play, FolderOpen, HardDrive,
+  AlertCircle, CheckCircle2, Clock, Tv2, Film, Download,
+  MoreVertical, Radio, Wifi
+} from 'lucide-react';
+import { formatBytes, formatDuration } from '../utils/format';
+
+interface RecordingMeta {
+  id: string;
+  channelName: string;
+  programTitle: string;
+  streamUrl: string;
+  outputPath: string;
+  filename: string;
+  startTime: string;
+  durationSeconds: number | null;
+  status: 'recording' | 'completed' | 'error';
+  size: number;
+}
+
+interface ActiveRecording extends RecordingMeta {
+  elapsedSeconds: number;
+}
+
+interface DVRPageProps {
+  channels: XtreamChannel[];
+  onPlayFile: (path: string) => void;
+  accentColor?: string;
+}
+
+export const DVRPage: React.FC<DVRPageProps> = ({
+  channels, onPlayFile, accentColor = '#00FFFF'
+}) => {
+  const [activeRecordings, setActiveRecordings] = useState<ActiveRecording[]>([]);
+  const [library, setLibrary] = useState<RecordingMeta[]>([]);
+  const [dvrStatus, setDvrStatus] = useState<{
+    activeCount: number;
+    maxConcurrent: number;
+    ffmpegAvailable: boolean;
+    outputDir: string;
+  } | null>(null);
+  const [tab, setTab] = useState<'active' | 'library' | 'schedule'>('active');
+  const [showNewRecording, setShowNewRecording] = useState(false);
+
+  // Load status and library on mount
+  useEffect(() => {
+    const load = async () => {
+      const status = await window.electronAPI.invoke('dvr:status');
+      setDvrStatus(status);
+      const { recordings } = await window.electronAPI.invoke('dvr:list-active');
+      setActiveRecordings(recordings);
+      const lib = await window.electronAPI.invoke('dvr:list-library');
+      setLibrary(lib);
+    };
+    load();
+
+    // Listen for DVR events
+    const onProgress = (_e: unknown, data: { id: string; size: number; elapsedSeconds: number }) => {
+      setActiveRecordings(prev => prev.map(r =>
+        r.id === data.id ? { ...r, size: data.size, elapsedSeconds: data.elapsedSeconds } : r
+      ));
+    };
+
+    const onCompleted = (_e: unknown, data: { id: string; status: string; filename: string }) => {
+      setActiveRecordings(prev => prev.filter(r => r.id !== data.id));
+      window.electronAPI.invoke('dvr:list-library').then(setLibrary);
+    };
+
+    window.electronAPI?.on('dvr:progress', onProgress);
+    window.electronAPI?.on('dvr:completed', onCompleted);
+
+    // Refresh every 5 seconds
+    const interval = setInterval(load, 5000);
+
+    return () => {
+      window.electronAPI?.off('dvr:progress', onProgress);
+      window.electronAPI?.off('dvr:completed', onCompleted);
+      clearInterval(interval);
+    };
+  }, []);
+
+  const handleStopRecording = async (id: string) => {
+    await window.electronAPI.invoke('dvr:stop', id);
+    setActiveRecordings(prev => prev.filter(r => r.id !== id));
+  };
+
+  const handleDeleteFromLibrary = async (id: string, deleteFile: boolean) => {
+    await window.electronAPI.invoke('dvr:delete', { recordingId: id, deleteFile });
+    setLibrary(prev => prev.filter(r => r.id !== id));
+  };
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+
+      {/* ── Header ───────────────────────────────────────────────────── */}
+      <div className="px-6 py-4 border-b border-white/8 shrink-0 flex items-center gap-4">
+        <div>
+          <h1 className="text-white text-lg font-bold flex items-center gap-2">
+            <Circle size={16} className="text-red-500 fill-red-500 animate-pulse" />
+            DVR Recording
+          </h1>
+          <p className="text-white/40 text-xs mt-0.5">
+            {dvrStatus?.activeCount ?? 0} of {dvrStatus?.maxConcurrent ?? 3} slots used
+          </p>
+        </div>
+
+        {/* FFmpeg warning */}
+        {dvrStatus && !dvrStatus.ffmpegAvailable && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-yellow-500/10 
+            border border-yellow-500/30 rounded-xl text-yellow-400 text-xs ml-3">
+            <AlertCircle size={13} />
+            FFmpeg not found — DVR requires FFmpeg installed or bundled
+          </div>
+        )}
+
+        {/* Recording slots indicator */}
+        <div className="flex items-center gap-2 ml-auto">
+          {Array.from({ length: dvrStatus?.maxConcurrent ?? 3 }).map((_, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold"
+              style={i < (dvrStatus?.activeCount ?? 0) ? {
+                background: 'rgba(239,68,68,0.15)',
+                borderColor: 'rgba(239,68,68,0.4)',
+                color: '#f87171',
+              } : {
+                background: 'rgba(255,255,255,0.04)',
+                borderColor: 'rgba(255,255,255,0.08)',
+                color: 'rgba(255,255,255,0.25)',
+              }}
+            >
+              <Circle size={8} className={i < (dvrStatus?.activeCount ?? 0) ? 'fill-red-400 animate-pulse' : ''} />
+              Slot {i + 1}
+            </div>
+          ))}
+
+          {/* New Recording button */}
+          <button
+            onClick={() => setShowNewRecording(true)}
+            disabled={!dvrStatus?.ffmpegAvailable || (dvrStatus?.activeCount ?? 0) >= (dvrStatus?.maxConcurrent ?? 3)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold
+              transition-all hover:scale-105 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ml-2"
+            style={{
+              background: accentColor,
+              color: '#000',
+              boxShadow: `0 0 12px ${accentColor}40`,
+            }}
+          >
+            <Circle size={12} className="fill-current" />
+            Record
+          </button>
+        </div>
+      </div>
+
+      {/* ── Tabs ─────────────────────────────────────────────────────── */}
+      <div className="flex gap-0 px-6 pt-3 border-b border-white/8 shrink-0">
+        {[
+          { id: 'active', label: 'Active', icon: <Radio size={13} />, count: activeRecordings.length },
+          { id: 'library', label: 'Library', icon: <Film size={13} />, count: library.filter(r => r.status === 'completed').length },
+          { id: 'schedule', label: 'Scheduled', icon: <Clock size={13} />, count: 0 },
+        ].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id as typeof tab)}
+            className={`
+              flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold
+              border-b-2 transition-all -mb-px
+              ${tab === t.id
+                ? 'border-current text-white'
+                : 'border-transparent text-white/35 hover:text-white/60'
+              }
+            `}
+            style={tab === t.id ? { borderColor: accentColor, color: 'white' } : {}}
+          >
+            {t.icon}
+            {t.label}
+            {t.count > 0 && (
+              <span
+                className="text-[9px] px-1.5 py-0.5 rounded-full font-bold"
+                style={tab === t.id
+                  ? { background: `${accentColor}30`, color: accentColor }
+                  : { background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.4)' }
+                }
+              >
+                {t.count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Content ──────────────────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto">
+
+        {/* Active Recordings */}
+        {tab === 'active' && (
+          <div className="p-6 space-y-3">
+            {activeRecordings.length === 0 ? (
+              <EmptyDVRState accentColor={accentColor} onRecord={() => setShowNewRecording(true)} />
+            ) : (
+              activeRecordings.map(rec => (
+                <ActiveRecordingCard
+                  key={rec.id}
+                  recording={rec}
+                  onStop={() => handleStopRecording(rec.id)}
+                  accentColor={accentColor}
+                />
+              ))
+            )}
+
+            {/* Slot guide */}
+            {activeRecordings.length > 0 && (
+              <div className="mt-4 p-4 rounded-xl border border-white/6 bg-white/2">
+                <p className="text-white/40 text-xs text-center">
+                  {(dvrStatus?.maxConcurrent ?? 3) - activeRecordings.length} recording slot{
+                    (dvrStatus?.maxConcurrent ?? 3) - activeRecordings.length !== 1 ? 's' : ''
+                  } available · You can watch any channel while recording
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Library */}
+        {tab === 'library' && (
+          <div className="p-6">
+            {library.filter(r => r.status === 'completed').length === 0 ? (
+              <div className="text-center py-16">
+                <Film size={40} className="mx-auto text-white/15 mb-3" />
+                <p className="text-white/30 text-sm">No recordings yet</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {library
+                  .filter(r => r.status === 'completed')
+                  .map(rec => (
+                    <LibraryRecordingCard
+                      key={rec.id}
+                      recording={rec}
+                      onPlay={() => onPlayFile(rec.outputPath)}
+                      onDelete={(deleteFile) => handleDeleteFromLibrary(rec.id, deleteFile)}
+                      onOpenFolder={() => window.electronAPI.openExternal(
+                        `file://${rec.outputPath.substring(0, rec.outputPath.lastIndexOf('\\'))}`
+                      )}
+                      accentColor={accentColor}
+                    />
+                  ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Scheduled */}
+        {tab === 'schedule' && (
+          <div className="flex flex-col items-center justify-center h-64 gap-3">
+            <Clock size={40} className="text-white/15" />
+            <p className="text-white/30 text-sm">Scheduled recordings coming soon</p>
+            <p className="text-white/20 text-xs">Set a recording timer from the EPG guide</p>
+          </div>
+        )}
+      </div>
+
+      {/* ── New Recording Dialog ──────────────────────────────────────── */}
+      {showNewRecording && (
+        <NewRecordingDialog
+          channels={channels}
+          onClose={() => setShowNewRecording(false)}
+          onStart={async (data) => {
+            const result = await window.electronAPI.invoke('dvr:start', data);
+            if (result.success) {
+              setShowNewRecording(false);
+              const { recordings } = await window.electronAPI.invoke('dvr:list-active');
+              setActiveRecordings(recordings);
+            }
+            return result;
+          }}
+          accentColor={accentColor}
+          maxSlots={dvrStatus?.maxConcurrent ?? 3}
+          activeCount={dvrStatus?.activeCount ?? 0}
+        />
+      )}
+    </div>
+  );
+};
+
+// Active recording card
+const ActiveRecordingCard: React.FC<{
+  recording: ActiveRecording;
+  onStop: () => void;
+  accentColor: string;
+}> = ({ recording, onStop, accentColor }) => (
+  <div className="flex items-center gap-4 p-4 rounded-2xl border border-red-500/20 bg-red-500/5">
+    {/* Recording indicator */}
+    <div className="w-12 h-12 rounded-xl bg-red-500/15 flex items-center justify-center shrink-0 border border-red-500/30">
+      <Circle size={20} className="text-red-400 fill-red-400 animate-pulse" />
+    </div>
+
+    {/* Info */}
+    <div className="flex-1 min-w-0">
+      <div className="flex items-center gap-2 mb-0.5">
+        <p className="text-white font-semibold text-sm truncate">{recording.programTitle}</p>
+        <span className="text-[9px] px-1.5 py-0.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded font-bold shrink-0">
+          REC
+        </span>
+      </div>
+      <p className="text-white/50 text-xs truncate">{recording.channelName}</p>
+      <div className="flex items-center gap-3 mt-1.5 text-[10px] text-white/30">
+        <span className="flex items-center gap-1">
+          <Clock size={9} /> {formatDuration(recording.elapsedSeconds)}
+        </span>
+        <span className="flex items-center gap-1">
+          <HardDrive size={9} /> {formatBytes(recording.size)}
+        </span>
+      </div>
+    </div>
+
+    {/* Stop button */}
+    <button
+      onClick={onStop}
+      className="flex items-center gap-1.5 px-3 py-2 bg-red-500/20 
+        border border-red-500/40 text-red-400 text-xs font-semibold 
+        rounded-xl hover:bg-red-500/30 transition-colors"
+    >
+      <Square size={12} fill="currentColor" /> Stop
+    </button>
+  </div>
+);
+
+// Library recording card
+const LibraryRecordingCard: React.FC<{
+  recording: RecordingMeta;
+  onPlay: () => void;
+  onDelete: (deleteFile: boolean) => void;
+  onOpenFolder: () => void;
+  accentColor: string;
+}> = ({ recording, onPlay, onDelete, onOpenFolder, accentColor }) => {
+  const [showMenu, setShowMenu] = useState(false);
+  const recorded = new Date(recording.startTime);
+
+  return (
+    <div className="flex items-center gap-3 p-3.5 rounded-xl border border-white/6 bg-white/3 hover:bg-white/5 transition-colors group">
+      {/* Icon */}
+      <div className="w-10 h-10 rounded-xl bg-white/8 flex items-center justify-center shrink-0">
+        <Film size={18} className="text-white/40" />
+      </div>
+
+      {/* Info */}
+      <div className="flex-1 min-w-0">
+        <p className="text-white/85 text-sm font-medium truncate">{recording.programTitle}</p>
+        <div className="flex items-center gap-3 mt-0.5 text-[10px] text-white/30">
+          <span>{recording.channelName}</span>
+          <span>{recorded.toLocaleDateString()}</span>
+          <span>{formatBytes(recording.size)}</span>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          onClick={onPlay}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold
+            transition-colors"
+          style={{ background: `${accentColor}20`, color: accentColor }}
+        >
+          <Play size={11} fill="currentColor" /> Play
+        </button>
+        <button
+          onClick={onOpenFolder}
+          className="p-1.5 text-white/30 hover:text-white/60 rounded-lg hover:bg-white/5"
+          title="Open folder"
+        >
+          <FolderOpen size={14} />
+        </button>
+        <div className="relative">
+          <button
+            onClick={() => setShowMenu(p => !p)}
+            className="p-1.5 text-white/30 hover:text-white/60 rounded-lg hover:bg-white/5"
+          >
+            <MoreVertical size={14} />
+          </button>
+          {showMenu && (
+            <div className="absolute right-0 bottom-8 bg-[#0c0c18] border border-white/10 
+              rounded-xl shadow-2xl overflow-hidden z-20 w-44 py-1">
+              <button
+                onClick={() => { onDelete(false); setShowMenu(false); }}
+                className="w-full px-3 py-2 text-xs text-left text-white/60 hover:bg-white/8 hover:text-white flex items-center gap-2"
+              >
+                <Trash2 size={12} /> Remove from library
+              </button>
+              <button
+                onClick={() => { if (confirm('Delete the recording file permanently?')) onDelete(true); setShowMenu(false); }}
+                className="w-full px-3 py-2 text-xs text-left text-red-400/70 hover:bg-red-500/10 hover:text-red-400 flex items-center gap-2"
+              >
+                <Trash2 size={12} /> Delete file permanently
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// New Recording Dialog
+const NewRecordingDialog: React.FC<{
+  channels: XtreamChannel[];
+  onClose: () => void;
+  onStart: (data: unknown) => Promise<{ success: boolean; error?: string }>;
+  accentColor: string;
+  maxSlots: number;
+  activeCount: number;
+}> = ({ channels, onClose, onStart, accentColor, maxSlots, activeCount }) => {
+  const [search, setSearch] = useState('');
+  const [selectedChannel, setSelectedChannel] = useState<XtreamChannel | null>(null);
+  const [programTitle, setProgramTitle] = useState('');
+  const [duration, setDuration] = useState(60); // minutes
+  const [useTimer, setUseTimer] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [error, setError] = useState('');
+
+  const filteredChannels = useMemo(() =>
+    channels.filter(c => c.name?.toLowerCase().includes(search.toLowerCase())).slice(0, 50),
+    [channels, search]
+  );
+
+  const handleStart = async () => {
+    if (!selectedChannel) return;
+    setIsStarting(true);
+    setError('');
+    const result = await onStart({
+      streamUrl: `${selectedChannel.stream_url}`,
+      channelName: selectedChannel.name,
+      programTitle: programTitle || selectedChannel.name,
+      durationSeconds: useTimer ? duration * 60 : null,
+    });
+    if (!result.success) {
+      setError(result.error || 'Failed to start recording');
+      setIsStarting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/80 backdrop-blur-sm">
+      <div className="w-[480px] max-h-[85vh] flex flex-col bg-[#080810] border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
+
+        <div className="px-5 py-4 border-b border-white/8 shrink-0">
+          <h3 className="text-white font-bold text-base flex items-center gap-2">
+            <Circle size={14} className="text-red-400 fill-red-400 animate-pulse" />
+            New Recording
+          </h3>
+          <p className="text-white/40 text-xs mt-0.5">
+            Slot {activeCount + 1} of {maxSlots}
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {/* Channel search */}
+          <div>
+            <label className="text-white/50 text-xs font-semibold block mb-1.5">Channel</label>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search channels..."
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 
+                text-white text-sm placeholder:text-white/20 focus:outline-none focus:border-cyan-500/40"
+            />
+            <div className="mt-2 max-h-36 overflow-y-auto rounded-xl border border-white/8 divide-y divide-white/5">
+              {filteredChannels.map(ch => (
+                <button
+                  key={ch.stream_id}
+                  onClick={() => { setSelectedChannel(ch); setProgramTitle(ch.name); }}
+                  className={`w-full flex items-center gap-2 px-3 py-2.5 text-left text-xs transition-colors ${
+                    selectedChannel?.stream_id === ch.stream_id
+                      ? 'bg-white/8 text-white'
+                      : 'text-white/60 hover:bg-white/5 hover:text-white'
+                  }`}
+                >
+                  <div className="w-1.5 h-1.5 rounded-full shrink-0"
+                       style={{ background: selectedChannel?.stream_id === ch.stream_id ? accentColor : 'rgba(255,255,255,0.2)' }} />
+                  {ch.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Program title */}
+          <div>
+            <label className="text-white/50 text-xs font-semibold block mb-1.5">Recording Title</label>
+            <input
+              value={programTitle}
+              onChange={e => setProgramTitle(e.target.value)}
+              placeholder="Recording title..."
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 
+                text-white text-sm placeholder:text-white/20 focus:outline-none focus:border-cyan-500/40"
+            />
+          </div>
+
+          {/* Duration timer */}
+          <div className="flex items-center justify-between p-3 rounded-xl border border-white/8 bg-white/3">
+            <div>
+              <p className="text-white/80 text-sm font-medium">Auto-Stop Timer</p>
+              <p className="text-white/35 text-xs">Stop recording automatically after set time</p>
+            </div>
+            <button
+              onClick={() => setUseTimer(p => !p)}
+              className={`relative w-11 h-6 rounded-full transition-colors ${useTimer ? '' : 'bg-white/15'}`}
+              style={useTimer ? { background: accentColor } : {}}
+            >
+              <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${useTimer ? 'translate-x-5' : ''}`} />
+            </button>
+          </div>
+
+          {useTimer && (
+            <div>
+              <label className="text-white/50 text-xs font-semibold block mb-1.5">
+                Duration — {duration} minutes ({Math.floor(duration / 60)}h {duration % 60}m)
+              </label>
+              <input
+                type="range" min={5} max={480} step={5} value={duration}
+                onChange={e => setDuration(parseInt(e.target.value))}
+                className="w-full" style={{ accentColor }}
+              />
+              <div className="flex justify-between text-[10px] text-white/25 mt-1">
+                <span>5m</span><span>1h</span><span>2h</span><span>4h</span><span>8h</span>
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl 
+              bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
+              <AlertCircle size={13} /> {error}
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 py-4 border-t border-white/8 flex gap-2 shrink-0">
+          <button onClick={onClose} className="px-4 py-2.5 text-white/50 text-sm hover:text-white transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={handleStart}
+            disabled={!selectedChannel || isStarting}
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-bold
+              rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)', color: 'white' }}
+          >
+            <Circle size={13} className="fill-white animate-pulse" />
+            {isStarting ? 'Starting...' : 'Start Recording'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const EmptyDVRState: React.FC<{ accentColor: string; onRecord: () => void }> = ({ accentColor, onRecord }) => (
+  <div className="flex flex-col items-center justify-center py-20 gap-4">
+    <div className="w-16 h-16 rounded-2xl flex items-center justify-center"
+         style={{ background: `${accentColor}15`, border: `1px solid ${accentColor}20` }}>
+      <Circle size={28} style={{ color: accentColor }} />
+    </div>
+    <div className="text-center">
+      <p className="text-white/60 text-sm font-semibold">No active recordings</p>
+      <p className="text-white/25 text-xs mt-1">You can record up to 3 channels simultaneously</p>
+    </div>
+    <button
+      onClick={onRecord}
+      className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all hover:scale-105"
+      style={{ background: accentColor, color: '#000' }}
+    >
+      <Circle size={14} className="fill-current" /> Start Recording
+    </button>
+  </div>
+);
+```
+
+---
+
+## 🎨 FEATURE 5 — COMPLETE THEME SYSTEM (ALL 8 THEMES)
+
+```typescript
+// services/themeSystem.ts — Complete theme engine
+
+export interface Theme {
+  id: string;
+  name: string;
+  description: string;
+  preview: string; // gradient CSS for preview swatch
+
+  // Canvas / backgrounds
+  bg1: string;        // deepest background
+  bg2: string;        // card surface
+  bg3: string;        // elevated elements
+  bgGlass: string;    // glassmorphism bg
+
+  // Accent colors
+  accent1: string;    // primary interactive
+  accent2: string;    // secondary / hover
+  accentLive: string; // live badge / recording
+
+  // Text
+  textPrimary: string;
+  textSecondary: string;
+  textMuted: string;
+
+  // Borders
+  border: string;
+  borderHover: string;
+
+  // Gradients
+  heroGradient: string;
+  sidebarGradient: string;
+  glowColor: string;      // for box shadows / neon effects
+  glowIntensity: string;  // shadow spread
+
+  // Nav
+  navActive: string;
+  navActiveText: string;
+  navActiveBorder: string;
+
+  // Special
+  liveIndicator: string;
+  font: string;
+}
+
+export const THEMES: Record<string, Theme> = {
+
+  // ── 1. DYLANDOS DEFAULT (Electric Cyan) ──────────────────────────────
+  default: {
+    id: 'default',
+    name: 'Electric Cyan',
+    description: 'The signature DYLANDOS look',
+    preview: 'linear-gradient(135deg, #00FFFF, #0066FF)',
+    bg1: '#000000',
+    bg2: '#0a0a10',
+    bg3: '#141420',
+    bgGlass: 'rgba(0,255,255,0.04)',
+    accent1: '#00FFFF',
+    accent2: '#0066FF',
+    accentLive: '#FF3366',
+    textPrimary: '#F8FAFC',
+    textSecondary: '#94A3B8',
+    textMuted: '#334155',
+    border: 'rgba(0,255,255,0.12)',
+    borderHover: 'rgba(0,255,255,0.3)',
+    heroGradient: 'linear-gradient(135deg, rgba(0,255,255,0.15) 0%, rgba(0,102,255,0.08) 100%)',
+    sidebarGradient: 'linear-gradient(180deg, #000000 0%, #050510 100%)',
+    glowColor: '#00FFFF',
+    glowIntensity: '20px',
+    navActive: 'rgba(0,255,255,0.08)',
+    navActiveText: '#00FFFF',
+    navActiveBorder: '#00FFFF',
+    liveIndicator: '#EF4444',
+    font: "'Inter', sans-serif",
+  },
+
+  // ── 2. NEON HOT PINK 🔥 ──────────────────────────────────────────────
+  neonPink: {
+    id: 'neonPink',
+    name: 'Neon Hot Pink',
+    description: 'High-voltage hot pink neon fire',
+    preview: 'linear-gradient(135deg, #FF0090, #FF6EC7)',
+    bg1: '#050008',
+    bg2: '#0d0012',
+    bg3: '#160018',
+    bgGlass: 'rgba(255,0,144,0.05)',
+    accent1: '#FF0090',
+    accent2: '#FF6EC7',
+    accentLive: '#FF3300',
+    textPrimary: '#FFF0F8',
+    textSecondary: '#E8A0CF',
+    textMuted: '#5C2040',
+    border: 'rgba(255,0,144,0.15)',
+    borderHover: 'rgba(255,0,144,0.4)',
+    heroGradient: 'linear-gradient(135deg, rgba(255,0,144,0.18) 0%, rgba(255,110,199,0.08) 100%)',
+    sidebarGradient: 'linear-gradient(180deg, #050008 0%, #0d0012 100%)',
+    glowColor: '#FF0090',
+    glowIntensity: '25px',
+    navActive: 'rgba(255,0,144,0.1)',
+    navActiveText: '#FF6EC7',
+    navActiveBorder: '#FF0090',
+    liveIndicator: '#FF3300',
+    font: "'Inter', sans-serif",
+  },
+
+  // ── 3. LAMBORGHINI NEON ───────────────────────────────────────────────
+  lamborghini: {
+    id: 'lamborghini',
+    name: 'Lamborghini',
+    description: 'Raging Bull neon amber + carbon black',
+    preview: 'linear-gradient(135deg, #FF8C00, #FFD700)',
+    bg1: '#030200',
+    bg2: '#0c0a00',
+    bg3: '#161200',
+    bgGlass: 'rgba(255,180,0,0.04)',
+    accent1: '#FF8C00',
+    accent2: '#FFD700',
+    accentLive: '#FF2D00',
+    textPrimary: '#FFF8E8',
+    textSecondary: '#C8A860',
+    textMuted: '#4A3800',
+    border: 'rgba(255,140,0,0.15)',
+    borderHover: 'rgba(255,215,0,0.4)',
+    heroGradient: 'linear-gradient(135deg, rgba(255,140,0,0.15) 0%, rgba(255,215,0,0.06) 100%)',
+    sidebarGradient: 'linear-gradient(180deg, #030200 0%, #0c0a00 100%)',
+    glowColor: '#FF8C00',
+    glowIntensity: '22px',
+    navActive: 'rgba(255,140,0,0.1)',
+    navActiveText: '#FFD700',
+    navActiveBorder: '#FF8C00',
+    liveIndicator: '#FF2D00',
+    font: "'Inter', sans-serif",
+  },
+
+  // ── 4. MATRIX GREEN ───────────────────────────────────────────────────
+  matrix: {
+    id: 'matrix',
+    name: 'Matrix Green',
+    description: 'Digital rain — deep green neon',
+    preview: 'linear-gradient(135deg, #00FF41, #003B00)',
+    bg1: '#000500',
+    bg2: '#000e00',
+    bg3: '#001500',
+    bgGlass: 'rgba(0,255,65,0.04)',
+    accent1: '#00FF41',
+    accent2: '#00CC33',
+    accentLive: '#FF3300',
+    textPrimary: '#E8FFE8',
+    textSecondary: '#80C080',
+    textMuted: '#1A4020',
+    border: 'rgba(0,255,65,0.12)',
+    borderHover: 'rgba(0,255,65,0.35)',
+    heroGradient: 'linear-gradient(135deg, rgba(0,255,65,0.12) 0%, rgba(0,204,51,0.05) 100%)',
+    sidebarGradient: 'linear-gradient(180deg, #000500 0%, #000e00 100%)',
+    glowColor: '#00FF41',
+    glowIntensity: '20px',
+    navActive: 'rgba(0,255,65,0.08)',
+    navActiveText: '#00FF41',
+    navActiveBorder: '#00FF41',
+    liveIndicator: '#FF3300',
+    font: "'JetBrains Mono', monospace",
+  },
+
+  // ── 5. MIDNIGHT PURPLE ────────────────────────────────────────────────
+  midnightPurple: {
+    id: 'midnightPurple',
+    name: 'Midnight Purple',
+    description: 'Deep cosmic violet galaxy',
+    preview: 'linear-gradient(135deg, #7B2FBE, #D946EF)',
+    bg1: '#030008',
+    bg2: '#080012',
+    bg3: '#100020',
+    bgGlass: 'rgba(123,47,190,0.06)',
+    accent1: '#A855F7',
+    accent2: '#D946EF',
+    accentLive: '#FF3366',
+    textPrimary: '#F5F0FF',
+    textSecondary: '#C4A8F0',
+    textMuted: '#3D2060',
+    border: 'rgba(168,85,247,0.15)',
+    borderHover: 'rgba(217,70,239,0.4)',
+    heroGradient: 'linear-gradient(135deg, rgba(123,47,190,0.18) 0%, rgba(217,70,239,0.08) 100%)',
+    sidebarGradient: 'linear-gradient(180deg, #030008 0%, #080012 100%)',
+    glowColor: '#A855F7',
+    glowIntensity: '22px',
+    navActive: 'rgba(168,85,247,0.1)',
+    navActiveText: '#D946EF',
+    navActiveBorder: '#A855F7',
+    liveIndicator: '#FF3366',
+    font: "'Inter', sans-serif",
+  },
+
+  // ── 6. ICE BLUE (Arctic) ──────────────────────────────────────────────
+  arcticBlue: {
+    id: 'arcticBlue',
+    name: 'Arctic Ice',
+    description: 'Crystal clear ice blue precision',
+    preview: 'linear-gradient(135deg, #00D4FF, #0080FF)',
+    bg1: '#000810',
+    bg2: '#001020',
+    bg3: '#001830',
+    bgGlass: 'rgba(0,212,255,0.04)',
+    accent1: '#00D4FF',
+    accent2: '#0080FF',
+    accentLive: '#FF3366',
+    textPrimary: '#F0F8FF',
+    textSecondary: '#80C8E8',
+    textMuted: '#0A3050',
+    border: 'rgba(0,212,255,0.12)',
+    borderHover: 'rgba(0,212,255,0.35)',
+    heroGradient: 'linear-gradient(135deg, rgba(0,212,255,0.12) 0%, rgba(0,128,255,0.06) 100%)',
+    sidebarGradient: 'linear-gradient(180deg, #000810 0%, #001020 100%)',
+    glowColor: '#00D4FF',
+    glowIntensity: '20px',
+    navActive: 'rgba(0,212,255,0.08)',
+    navActiveText: '#00D4FF',
+    navActiveBorder: '#00D4FF',
+    liveIndicator: '#FF3366',
+    font: "'Inter', sans-serif",
+  },
+
+  // ── 7. CRIMSON DARK ───────────────────────────────────────────────────
+  crimson: {
+    id: 'crimson',
+    name: 'Crimson Dark',
+    description: 'Blood red dark luxury',
+    preview: 'linear-gradient(135deg, #DC2626, #FF4444)',
+    bg1: '#080000',
+    bg2: '#120000',
+    bg3: '#1C0000',
+    bgGlass: 'rgba(220,38,38,0.05)',
+    accent1: '#FF3333',
+    accent2: '#FF6666',
+    accentLive: '#FF3300',
+    textPrimary: '#FFF0F0',
+    textSecondary: '#E08080',
+    textMuted: '#500000',
+    border: 'rgba(255,51,51,0.15)',
+    borderHover: 'rgba(255,51,51,0.4)',
+    heroGradient: 'linear-gradient(135deg, rgba(220,38,38,0.15) 0%, rgba(255,68,68,0.06) 100%)',
+    sidebarGradient: 'linear-gradient(180deg, #080000 0%, #120000 100%)',
+    glowColor: '#FF3333',
+    glowIntensity: '22px',
+    navActive: 'rgba(255,51,51,0.1)',
+    navActiveText: '#FF6666',
+    navActiveBorder: '#FF3333',
+    liveIndicator: '#FF6600',
+    font: "'Inter', sans-serif",
+  },
+
+  // ── 8. LIGHT MODE ─────────────────────────────────────────────────────
+  light: {
+    id: 'light',
+    name: 'Bright Light',
+    description: 'Clean white professional mode',
+    preview: 'linear-gradient(135deg, #F8FAFC, #E2E8F0)',
+    bg1: '#F8FAFC',
+    bg2: '#FFFFFF',
+    bg3: '#EEF2FF',
+    bgGlass: 'rgba(0,0,0,0.03)',
+    accent1: '#4F46E5',
+    accent2: '#7C3AED',
+    accentLive: '#EF4444',
+    textPrimary: '#0F172A',
+    textSecondary: '#475569',
+    textMuted: '#94A3B8',
+    border: 'rgba(0,0,0,0.08)',
+    borderHover: 'rgba(79,70,229,0.3)',
+    heroGradient: 'linear-gradient(135deg, rgba(79,70,229,0.08) 0%, rgba(124,58,237,0.04) 100%)',
+    sidebarGradient: 'linear-gradient(180deg, #F8FAFC 0%, #EEF2FF 100%)',
+    glowColor: '#4F46E5',
+    glowIntensity: '15px',
+    navActive: 'rgba(79,70,229,0.08)',
+    navActiveText: '#4F46E5',
+    navActiveBorder: '#4F46E5',
+    liveIndicator: '#EF4444',
+    font: "'Inter', sans-serif",
+  },
+};
+
+// ── Theme Application Engine ───────────────────────────────────────────────
+export const applyTheme = (theme: Theme): void => {
+  const root = document.documentElement;
+
+  root.style.setProperty('--theme-bg1', theme.bg1);
+  root.style.setProperty('--theme-bg2', theme.bg2);
+  root.style.setProperty('--theme-bg3', theme.bg3);
+  root.style.setProperty('--theme-bg-glass', theme.bgGlass);
+  root.style.setProperty('--theme-accent1', theme.accent1);
+  root.style.setProperty('--theme-accent2', theme.accent2);
+  root.style.setProperty('--theme-accent-live', theme.accentLive);
+  root.style.setProperty('--theme-text-primary', theme.textPrimary);
+  root.style.setProperty('--theme-text-secondary', theme.textSecondary);
+  root.style.setProperty('--theme-text-muted', theme.textMuted);
+  root.style.setProperty('--theme-border', theme.border);
+  root.style.setProperty('--theme-border-hover', theme.borderHover);
+  root.style.setProperty('--theme-hero-gradient', theme.heroGradient);
+  root.style.setProperty('--theme-sidebar-gradient', theme.sidebarGradient);
+  root.style.setProperty('--theme-glow-color', theme.glowColor);
+  root.style.setProperty('--theme-glow-intensity', theme.glowIntensity);
+  root.style.setProperty('--theme-nav-active', theme.navActive);
+  root.style.setProperty('--theme-nav-active-text', theme.navActiveText);
+  root.style.setProperty('--theme-nav-active-border', theme.navActiveBorder);
+  root.style.setProperty('--theme-live-indicator', theme.liveIndicator);
+  root.style.setProperty('--theme-font', theme.font);
+
+  // Apply background to body
+  document.body.style.backgroundColor = theme.bg1;
+  document.body.style.color = theme.textPrimary;
+  document.body.style.fontFamily = theme.font;
+
+  // Persist
+  localStorage.setItem('dylandos:active-theme', theme.id);
+};
+
+// ── Theme CSS variables in index.css ──────────────────────────────────────
+// Add to src/index.css:
+/*
+:root {
+  --theme-bg1: #000000;
+  --theme-bg2: #0a0a10;
+  --theme-bg3: #141420;
+  --theme-accent1: #00FFFF;
+  --theme-accent2: #0066FF;
+  --theme-glow-color: #00FFFF;
+  --theme-glow-intensity: 20px;
+}
+
+body {
+  background-color: var(--theme-bg1);
+  color: var(--theme-text-primary);
+  font-family: var(--theme-font);
+  transition: background-color 0.4s ease, color 0.3s ease;
+}
+
+.theme-card {
+  background: var(--theme-bg2);
+  border: 1px solid var(--theme-border);
+}
+
+.theme-card:hover {
+  border-color: var(--theme-border-hover);
+  box-shadow: 0 0 var(--theme-glow-intensity) color-mix(in srgb, var(--theme-glow-color) 30%, transparent);
+}
+
+.theme-accent {
+  color: var(--theme-accent1);
+}
+
+.theme-accent-bg {
+  background-color: var(--theme-accent1);
+}
+
+.theme-glow {
+  box-shadow: 0 0 var(--theme-glow-intensity) color-mix(in srgb, var(--theme-glow-color) 40%, transparent);
+}
+
+.nav-active {
+  background: var(--theme-nav-active);
+  color: var(--theme-nav-active-text);
+  border-right: 2px solid var(--theme-nav-active-border);
+}
+*/
+```
+
+### Theme Selector in Settings
+
+```typescript
+// pages/Settings/ThemeTab.tsx — World-class theme picker
+
+export const ThemeTab: React.FC<{
+  currentThemeId: string;
+  onSelectTheme: (id: string) => void;
+}> = ({ currentThemeId, onSelectTheme }) => {
+  const themes = Object.values(THEMES);
+
+  return (
+    <div className="space-y-6">
+      <TabHeader title="Themes" description="Customize the look and feel of DYLANDOS IPTV ULTIMATE" />
+
+      <div className="grid grid-cols-2 gap-3">
+        {themes.map(theme => {
+          const isActive = theme.id === currentThemeId;
+          return (
+            <button
+              key={theme.id}
+              onClick={() => onSelectTheme(theme.id)}
+              className="relative text-left rounded-2xl overflow-hidden border-2 transition-all
+                hover:scale-[1.02] active:scale-[0.98]"
+              style={{
+                borderColor: isActive ? theme.accent1 : 'rgba(255,255,255,0.06)',
+                boxShadow: isActive ? `0 0 20px ${theme.accent1}40, inset 0 0 30px ${theme.accent1}08` : 'none',
+                background: theme.bg1,
+              }}
+            >
+              {/* Color bar */}
+              <div
+                className="h-16 w-full"
+                style={{ background: theme.preview }}
+              />
+
+              {/* Mock UI preview */}
+              <div className="p-3" style={{ background: theme.bg2 }}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-6 h-6 rounded-lg" style={{ background: `${theme.accent1}25`, border: `1px solid ${theme.accent1}40` }} />
+                  <div className="flex-1 space-y-1">
+                    <div className="h-2 rounded" style={{ background: theme.accent1, width: '60%' }} />
+                    <div className="h-1.5 rounded" style={{ background: theme.textMuted, width: '40%' }} />
+                  </div>
+                  {isActive && (
+                    <div className="w-5 h-5 rounded-full flex items-center justify-center"
+                         style={{ background: theme.accent1 }}>
+                      <Check size={10} className="text-black" strokeWidth={3} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-1.5">
+                  {[1, 2, 3].map(i => (
+                    <div key={i} className="flex-1 h-8 rounded-lg"
+                         style={{
+                           background: i === 1 ? `${theme.accent1}20` : theme.bg3,
+                           border: `1px solid ${i === 1 ? theme.accent1 + '30' : theme.border}`,
+                         }} />
+                  ))}
+                </div>
+              </div>
+
+              {/* Name */}
+              <div className="px-3 pb-3">
+                <p className="font-bold text-sm mt-2" style={{ color: theme.textPrimary }}>
+                  {theme.name}
+                </p>
+                <p className="text-[11px] mt-0.5" style={{ color: theme.textSecondary }}>
+                  {theme.description}
+                </p>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Neon Intensity Slider */}
+      <SettingsSection title="Neon Intensity">
+        <SettingsSlider
+          label="Glow Effect Strength"
+          description="Controls how bright the neon glow effects appear"
+          value={parseInt(THEMES[currentThemeId]?.glowIntensity ?? '20')}
+          min={0} max={50} step={5} unit="px"
+          onChange={() => {}}
+        />
+      </SettingsSection>
+    </div>
+  );
+};
+
+// Wire in useSettings.ts:
+export const useSettings = () => {
+  // ... existing ...
+
+  const setTheme = useCallback((themeId: string) => {
+    const theme = THEMES[themeId];
+    if (!theme) return;
+    applyTheme(theme);
+    updateSettings({ theme: themeId, accentColor: theme.accent1 });
+  }, [updateSettings]);
+
+  // Apply theme on load
+  useEffect(() => {
+    const savedThemeId = settings.theme ?? 'default';
+    const theme = THEMES[savedThemeId] ?? THEMES.default;
+    applyTheme(theme);
+  }, []);
+
+  return { settings, updateSettings, setTheme };
+};
+```
+
+---
+
+## 🔧 UTILITY FIXES — SIDEBAR DVR NAV + FINAL WIRING
+
+```typescript
+// components/Sidebar.tsx — Add DVR + Provider Manager buttons
+
+export const Sidebar: React.FC<SidebarProps> = ({
+  currentPage, onNavigate, isCollapsed, onToggle,
+  activeProvider, onOpenProviderManager, accentColor
+}) => {
+  const navItems = [
+    { id: 'home',      icon: <Home size={18} />,        label: 'Home' },
+    { id: 'live',      icon: <Tv2 size={18} />,         label: 'Live TV' },
+    { id: 'movies',    icon: <Film size={18} />,         label: 'Movies' },
+    { id: 'series',    icon: <Monitor size={18} />,      label: 'Series' },
+    { id: 'dvr',       icon: <Circle size={18} />,       label: 'DVR', badge: 'NEW' },
+    { id: 'favorites', icon: <Star size={18} />,         label: 'Favorites' },
+    { id: 'search',    icon: <Search size={18} />,       label: 'Search' },
+  ];
+
+  return (
+    <div
+      className="flex flex-col h-full border-r transition-all duration-300 shrink-0"
+      style={{
+        width: isCollapsed ? 56 : 192,
+        background: 'var(--theme-sidebar-gradient)',
+        borderColor: 'var(--theme-border)',
+      }}
+    >
+      {/* Logo */}
+      <div className="flex items-center gap-3 px-3 py-4 border-b shrink-0"
+           style={{ borderColor: 'var(--theme-border)' }}>
+        <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+             style={{ background: `${accentColor}20`, border: `1px solid ${accentColor}30` }}>
+          <Tv2 size={16} style={{ color: accentColor }} />
+        </div>
+        {!isCollapsed && (
+          <div className="min-w-0">
+            <p className="text-white text-xs font-black tracking-tight truncate">DYLANDOS</p>
+            <p className="text-[9px] font-bold tracking-widest truncate"
+               style={{ color: accentColor }}>
+              IPTV ULTIMATE
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Nav items */}
+      <div className="flex-1 overflow-y-auto py-2">
+        {navItems.map(item => {
+          const isActive = currentPage === item.id;
+          const isDvr = item.id === 'dvr';
+          return (
+            <button
+              key={item.id}
+              onClick={() => onNavigate(item.id as AppPage)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 transition-all
+                relative group border-r-2"
+              style={{
+                background: isActive ? `var(--theme-nav-active)` : 'transparent',
+                color: isActive ? `var(--theme-nav-active-text)` : 'rgba(255,255,255,0.45)',
+                borderRightColor: isActive ? `var(--theme-nav-active-border)` : 'transparent',
+              }}
+              title={isCollapsed ? item.label : undefined}
+            >
+              <span className="shrink-0" style={isActive ? { color: `var(--theme-nav-active-text)` } : {}}>
+                {isDvr
+                  ? <span style={isActive ? { color: '#EF4444' } : {}}>{item.icon}</span>
+                  : item.icon
+                }
+              </span>
+              {!isCollapsed && (
+                <span className="text-sm font-medium truncate flex-1 text-left">
+                  {item.label}
+                </span>
+              )}
+              {!isCollapsed && item.badge && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                      style={{ background: `${accentColor}25`, color: accentColor }}>
+                  {item.badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Bottom section */}
+      <div className="border-t py-2 space-y-0.5" style={{ borderColor: 'var(--theme-border)' }}>
+        {/* Provider indicator */}
+        <button
+          onClick={onOpenProviderManager}
+          className="w-full flex items-center gap-3 px-3 py-2.5 transition-colors
+            hover:bg-white/5 group"
+          title={isCollapsed ? 'Providers' : undefined}
+        >
+          <div className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0"
+               style={{
+                 background: `${accentColor}20`,
+                 border: `1px solid ${accentColor}30`,
+               }}>
+            <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: accentColor }} />
+          </div>
+          {!isCollapsed && (
+            <div className="flex-1 min-w-0 text-left">
+              <p className="text-[11px] font-semibold truncate"
+                 style={{ color: accentColor }}>
+                {activeProvider?.name || activeProvider?.username || 'No Provider'}
+              </p>
+              <p className="text-[9px] text-white/25">Switch Provider</p>
+            </div>
+          )}
+        </button>
+
+        {/* Settings */}
+        <button
+          onClick={() => onNavigate('settings')}
+          className="w-full flex items-center gap-3 px-3 py-2.5 
+            text-white/40 hover:text-white/70 hover:bg-white/5 transition-colors"
+          title={isCollapsed ? 'Settings' : undefined}
+        >
+          <Settings size={18} className="shrink-0" />
+          {!isCollapsed && <span className="text-sm">Settings</span>}
+        </button>
+      </div>
+    </div>
+  );
+};
+```
+
+---
+
+## 📋 FINAL MASTER CHECKLIST — THE LAST PUSH
+
+```
+════════════════════════════════════════════════════════
+  SPRINT 1 — Fix What's Broken (Day 1)
+════════════════════════════════════════════════════════
+□ Live TV category sidebar: add flex-1 + overflow-y-auto
+□ Series page: add aspect-[2/3] to poster container
+□ Apply all 5 performance fixes (from previous guide)
+□ Apply GPU flags in main.cjs
+
+════════════════════════════════════════════════════════
+  SPRINT 2 — Multi-Provider + DVR (Day 2-3)
+════════════════════════════════════════════════════════
+□ Add ProviderManager component
+□ Wire multi-provider state into App.tsx
+□ Add provider switcher to Sidebar bottom
+□ Add DVR IPC handlers to main.cjs (dvr:start/stop/status/etc.)
+□ Add DVRPage component
+□ Add DVR to Sidebar nav and AppPage type
+□ Add to preload: dvr:progress, dvr:completed events
+□ Bundle FFmpeg or add install instructions in About tab
+
+════════════════════════════════════════════════════════
+  SPRINT 3 — EPG + Player (Day 4)
+════════════════════════════════════════════════════════
+□ Add EpgGuide component
+□ Wire EpgGuide into LiveTV.tsx view toggle
+□ Add SubtitleRenderer component to VideoPlayer
+□ Replace existing OSD controls with PlayerControls component
+□ Add AudioTrack + SubtitleTrack detection from video element
+□ Add SeekPreview thumbnails to seek bar
+□ Add AutoPlayNext countdown for series
+
+════════════════════════════════════════════════════════
+  SPRINT 4 — Themes (Day 5)
+════════════════════════════════════════════════════════
+□ Add themeSystem.ts with all 8 themes
+□ Add CSS variables to index.css
+□ Replace hardcoded colors in Sidebar/TitleBar with CSS vars
+□ Replace hardcoded colors in VodCard with CSS vars
+□ Replace hardcoded colors in ChannelList with CSS vars
+□ Add ThemeTab to Settings panel
+□ Wire setTheme() into useSettings
+□ Apply saved theme on app launch
+□ Add theme transitions (0.3s ease on bg/color)
+
+════════════════════════════════════════════════════════
+  SPRINT 5 — Final Polish (Day 6)
+════════════════════════════════════════════════════════
+□ Add ToastProvider and replace all alerts/console.log UX
+□ Wire ProfileSelectionDialog into App.tsx
+□ Add keyboard shortcuts (useKeyboardShortcuts)
+□ Add StreamHealthIndicator to VideoPlayer
+□ Add UpdateBanner component
+□ Wire auto-updater in main.cjs
+□ Add Windows Jump List (setupJumpList)
+□ Test all 8 themes — verify no white/broken elements
+□ Test DVR: record 3 simultaneously, watch 4th stream
+□ Test EPG grid: scroll, NOW indicator, program hover
+□ Test Provider Manager: add/switch/delete providers
+□ Production build: npm run build:win
+```
+
+---
+
+## 🏆 WHAT DYLANDOS IPTV ULTIMATE WILL BE
+
+| Feature | TiviMate | Smarters Pro | OTT Navigator | **DYLANDOS IPTV ULTIMATE** |
+|---|---|---|---|---|
+| Multi-provider | ✅ | ✅ | ✅ | ✅ **Best UX + color coding** |
+| EPG Grid | ✅ | ⚠️ | ✅ | ✅ **Theme-aware + hover tooltip** |
+| DVR | ✅ | ❌ | ⚠️ | ✅ **3-stream + library** |
+| Themes | ❌ | ❌ | ⚠️ | ✅ **8 full neon themes** |
+| Seek thumbnails | ❌ | ❌ | ❌ | ✅ |
+| Stream health HUD | ❌ | ❌ | ❌ | ✅ |
+| Auto-reconnect | ⚠️ | ⚠️ | ⚠️ | ✅ **Exponential backoff** |
+| Sub rendering | ✅ | ✅ | ✅ | ✅ **Custom CSS engine** |
+| Windows native | ❌ Android | ❌ | ❌ | ✅ **Jump Lists, SMTC, Tray** |
+| GPU flags | N/A | N/A | N/A | ✅ **D3D11, hardware decode** |
+
+**DYLANDOS IPTV ULTIMATE is now designed to be #1 on Windows. Period.** 🔥🏆

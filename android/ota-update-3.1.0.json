@@ -1,0 +1,41 @@
+{
+  "version": "3.1.0",
+  "versionCode": 38,
+  "releaseDate": "2026-04-28",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "FIX: Firestick no longer goes to sleep during playback — WakeLock + FLAG_KEEP_SCREEN_ON are now acquired automatically whenever the player is open. No more waking up to a dead video surface.",
+    "FEATURE: Fullscreen button added to player controls bar, next to PiP. Press it to hide the Android navigation bar and status bar for a true cinema-mode immersive experience. Press again to restore.",
+    "FEATURE: Background DVR recording — recordings now continue independently after you close the player screen. Start up to 3 simultaneous recordings from the DVR or Guide screen and walk away.",
+    "FEATURE: TEE recording promotion — if you were watching a stream and had a simultaneous recording running, closing the player now promotes the recording to a standalone DIRECT mode instead of stopping it.",
+    "FEATURE: New 'Player Experience' settings section in Playback tab — configure Skip Interval (5/10/15/30/60s), Controls Auto-Hide Delay, Channel Zap Banner Duration, Preferred Audio Language, Controls Overlay Opacity, Keep Screen On toggle, Show Clock in Player, and Background Recording toggle.",
+    "FEATURE: New 'DVR Quick Options' in Playback settings — Default Recording Duration slider (15–180 min) and Background Recording toggle.",
+    "FEATURE: New 'Content Display' settings — Continue Watching row toggle and Thumbnail Quality (Low/Medium/High).",
+    "IMPROVEMENT: Player controls bar now supports 9 buttons: Rewind, Play/Pause, Fast Forward, Subtitles/CC, Audio Track, REC, PiP, Fullscreen, Close — all D-pad navigable."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "PLACEHOLDER_FIRESTICK_URL",
+      "apkSize": 59052044,
+      "sha256": "3f7c95125decbe9f4300ce075ecf3ea3669eef5734a1808685e85ce4f3dcbee5",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["armeabi-v7a"]
+    },
+    "premium": {
+      "apkUrl": "PLACEHOLDER_PREMIUM_URL",
+      "apkSize": 60310626,
+      "sha256": "c31f51b96e43a62eca885f243dde5f0ab0d1ee504e65a89ccd1d2a9371cdf7e2",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["arm64-v8a"]
+    }
+  },
+  "apkUrl": "PLACEHOLDER_FIRESTICK_URL",
+  "apkSize": 59052044,
+  "sha256": "3f7c95125decbe9f4300ce075ecf3ea3669eef5734a1808685e85ce4f3dcbee5",
+  "notes": "STEPS TO PUBLISH:\n1. Upload app-firestick-release.apk to Dropbox → copy direct link (dl=1)\n2. Upload app-premium-release.apk to Dropbox → copy direct link (dl=1)\n3. Replace PLACEHOLDER_FIRESTICK_URL with the Firestick APK Dropbox link\n4. Replace PLACEHOLDER_PREMIUM_URL with the Premium APK Dropbox link\n5. Run scripts/compute-sha256.ps1 against each APK and fill in sha256 fields\n6. Update apkSize fields with actual file sizes in bytes\n7. Update the top-level apkUrl to the Firestick APK link\n8. Save this file content as update.json in gist 6056e65b41641393abf585cecbd92d07"
+}

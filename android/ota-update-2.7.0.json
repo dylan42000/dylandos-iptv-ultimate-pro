@@ -1,0 +1,38 @@
+{
+  "version": "2.7.0",
+  "versionCode": 31,
+  "releaseDate": "2026-04-25",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "DVR OTG FIX: Firestick USB recording now works WITHOUT the broken FireOS SAF file picker — the app directly detects your OTG drive via getExternalFilesDirs() (no permission dialogs, no keyboard required)",
+    "DVR: Recording engine switched from LibVLC :sout to FFmpegKit -c copy — lower CPU on Firestick, better stream compatibility, no re-encoding",
+    "DVR: New 3-tier storage picker — tap your USB drive directly from a list (OTG shown first, then internal, then custom folder)",
+    "DVR: FireOS USB Setup Guide built into the app — step-by-step wizard for FAT32 formatting, powered OTG hub setup, and Bluetooth keyboard instructions",
+    "DVR: Storage path priority chain: OTG USB → Primary external → SAF custom folder → Internal (last resort)",
+    "DVR: Storage space check before recording starts — warns if less than 500MB free",
+    "DVR: File size live polling now works on all paths including OTG",
+    "Manifest: Added USB Host feature declaration, MANAGE_EXTERNAL_STORAGE, READ_MEDIA_VIDEO, RECEIVE_BOOT_COMPLETED, and USE_EXACT_ALARM permissions",
+    "FileProvider: DVR recording paths (internal and external) now properly exposed for file sharing"
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "PENDING_UPLOAD",
+      "apkSize": 0,
+      "sha256": "PENDING",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["armeabi-v7a"]
+    },
+    "premium": {
+      "apkUrl": "PENDING_UPLOAD",
+      "apkSize": 0,
+      "sha256": "PENDING",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["arm64-v8a"]
+    }
+  }
+}

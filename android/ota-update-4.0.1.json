@@ -1,0 +1,17 @@
+{
+  "versionCode": 49,
+  "versionName": "4.0.1",
+  "releaseNotes": "v4.0.1: Firestick D-pad and stability deep-dive patch.\n\n🔧 INPUT & FOCUS FIXES:\n• Movies category rail: OK/Center now correctly selects and enters the chosen category\n• Series category rail: OK/Center and Right now consistently select + enter\n• Removed ghost hot-pink focus state that stayed on first items in Movies, Series, Live TV, and Guide\n• Guide row highlight alignment corrected so row focus no longer appears one line off\n\n🎞️ PLAYER & SUBTITLE FIXES:\n• Subtitle picker off-by-one fixed (selecting a subtitle now picks the exact highlighted track)\n• Unified subtitle list mapping between UI rows and Enter-key selection\n• Added extra null-safe media initialization guards to prevent playback crashes\n\n📺 SERIES INFO UPGRADE:\n• Series detail panel now uses a richer movie-info style hero layout\n• Added backdrop hero, metadata badges (rating/year/genre/runtime), and director/cast display\n\n🛡️ CRASH HARDENING:\n• Added safe navigation guard against duplicate remote enter presses\n• Added additional DAO/network exception guards in Movies/Series detail flows\n• Background thread uncaught exceptions are now isolated to avoid whole-app process kills",
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_LINK/app-firestick-release.apk?dl=1",
+      "apkSha256": "f40dd11591886871655affd7d76a7fd761309e12389c2aa7f4e16db0a0c3b69d",
+      "apkSizeBytes": 59170788
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_PREMIUM_LINK/app-premium-release.apk?dl=1",
+      "apkSha256": "7776783e3419a497f03f209d635bfc1c6f9ffefd5bffe4c1d26cdde76d10b10b",
+      "apkSizeBytes": 60429310
+    }
+  }
+}

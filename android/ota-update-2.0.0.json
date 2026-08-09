@@ -1,0 +1,57 @@
+{
+  "versionCode": 21,
+  "versionName": "2.0.0",
+  "apkUrl": "https://www.dropbox.com/YOUR_FIRESTICK_DROPBOX_LINK_HERE/app-firestick-release.apk?dl=1",
+  "releaseNotes": "v2.0.0: DVR fully fixed and hardened. KSP migration for faster builds. USB/OTG storage persists across app restarts. Full DVR playback crash resolution.",
+  "changelog": [
+    "CRITICAL FIX: DVR playback crash — fd:// is not a valid LibVLC URI on Android. Now uses file:///proc/self/fd/N (correct kernel symlink format)",
+    "CRITICAL FIX: DVR playback crash — absolute file paths now properly prefixed with file:// so LibVLC can parse the URI scheme",
+    "CRITICAL FIX: DVR auto-recovery loop also crashed because it bypassed URI resolution — now calls resolveDvrUri() before rebuilding media",
+    "CRITICAL FIX: USB/OTG storage path now persisted to DataStore — survives app kill/restart. No more re-selecting USB drive every launch",
+    "HIGH FIX: Room DB now has explicit Migration(5,6) — dvr_recordings table is preserved on app update instead of being wiped by fallbackToDestructiveMigration",
+    "NEW: RecordingService polls file size every 30 seconds and updates Active tab UI with live recording size",
+    "NEW: DVR Play button is greyed/disabled when filePath is empty (recording active or path not yet saved) — prevents silent no-op taps",
+    "PERF: Migrated Hilt + Room annotation processing from KAPT to KSP — ~40% faster incremental builds, eliminates language version 2.0 fallback warnings",
+    "FIX: RecordingService coroutine scope now properly cancelled on onDestroy() — no more coroutine leaks when service is killed",
+    "BUMP: versionCode 20 → 21, versionName 1.9.1-BETA → 2.0.0"
+  ],
+  "requirements": {
+    "minSdk": 21,
+    "targetSdk": 34,
+    "firestickOptimized": true,
+    "recommendedDevices": [
+      "Fire TV Stick 4K",
+      "Fire TV Stick 4K Max",
+      "Fire TV Stick Lite",
+      "Fire TV Cube",
+      "NVIDIA Shield",
+      "Chromecast with Google TV",
+      "Any Android 5.0+ device"
+    ]
+  },
+  "buildVariants": {
+    "firestick": {
+      "abi": "armeabi-v7a",
+      "target": "Fire TV Stick 4K (primary)",
+      "apkUrl": "https://www.dropbox.com/YOUR_FIRESTICK_DROPBOX_LINK_HERE/app-firestick-release.apk?dl=1",
+      "apkPath": "android/app/build/outputs/apk/firestick/release/app-firestick-release.apk",
+      "apkSizeMB": "57.69 MB"
+    },
+    "premium": {
+      "abi": "arm64-v8a",
+      "target": "High-end ARM64 Android devices",
+      "apkUrl": "https://www.dropbox.com/YOUR_PREMIUM_DROPBOX_LINK_HERE/app-premium-release.apk?dl=1",
+      "apkPath": "android/app/build/outputs/apk/premium/release/app-premium-release.apk",
+      "apkSizeMB": "58.89 MB"
+    }
+  },
+  "_instructions": {
+    "step1": "Upload app-firestick-release.apk to Dropbox, get shareable link, change ?dl=0 to ?dl=1",
+    "step2": "Upload app-premium-release.apk to Dropbox, get shareable link, change ?dl=0 to ?dl=1",
+    "step3": "Replace YOUR_FIRESTICK_DROPBOX_LINK_HERE with your Firestick APK Dropbox link",
+    "step4": "Replace YOUR_PREMIUM_DROPBOX_LINK_HERE with your Premium APK Dropbox link",
+    "step5": "Also update the top-level 'apkUrl' field to point to the Firestick APK",
+    "step6": "Paste the final JSON into your GitHub Gist (raw URL must match GIST_UPDATE_URL in build.gradle.kts)",
+    "gistUrl": "https://gist.github.com/DYLANDOS_GITHUB_USERNAME/6056e65b41641393abf585cecbd92d07"
+  }
+}

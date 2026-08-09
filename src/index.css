@@ -1,0 +1,445 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DYLANDOS IPTV ULTIMATE — 3 Neon Theme System
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── NEON CYAN (Default) ────────────────────────────────────────────────── */
+[data-theme="neon-cyan"] {
+  --bg-base: #06080f;
+  --bg-surface: #0a0e18;
+  --bg-surface-2: #0e1422;
+  --bg-surface-3: #131a2d;
+  --bg-elevated: #161e33;
+  --border-subtle: rgba(6, 182, 212, 0.08);
+  --border-default: rgba(6, 182, 212, 0.15);
+  --border-accent: rgba(6, 182, 212, 0.35);
+  --accent: #06b6d4;
+  --accent-bright: #22d3ee;
+  --accent-glow: rgba(6, 182, 212, 0.25);
+  --accent-surface: rgba(6, 182, 212, 0.08);
+  --accent-surface-hover: rgba(6, 182, 212, 0.14);
+  --text-primary: #f0f4f8;
+  --text-secondary: rgba(240, 244, 248, 0.6);
+  --text-tertiary: rgba(240, 244, 248, 0.3);
+  --text-accent: #67e8f9;
+  --neon-glow: 0 0 20px rgba(6, 182, 212, 0.15), 0 0 60px rgba(6, 182, 212, 0.05);
+  --neon-glow-strong: 0 0 20px rgba(6, 182, 212, 0.3), 0 0 60px rgba(6, 182, 212, 0.1), 0 0 100px rgba(6, 182, 212, 0.05);
+  --gradient-accent: linear-gradient(135deg, #06b6d4, #0ea5e9);
+  --gradient-hero: linear-gradient(135deg, rgba(6, 182, 212, 0.12) 0%, rgba(14, 165, 233, 0.06) 100%);
+  --scrollbar-thumb: rgba(6, 182, 212, 0.2);
+}
+
+/* ── NEON PURPLE ────────────────────────────────────────────────────────── */
+[data-theme="neon-purple"] {
+  --bg-base: #08060f;
+  --bg-surface: #0e0a18;
+  --bg-surface-2: #140e22;
+  --bg-surface-3: #1a132d;
+  --bg-elevated: #1e1633;
+  --border-subtle: rgba(168, 85, 247, 0.08);
+  --border-default: rgba(168, 85, 247, 0.15);
+  --border-accent: rgba(168, 85, 247, 0.35);
+  --accent: #a855f7;
+  --accent-bright: #c084fc;
+  --accent-glow: rgba(168, 85, 247, 0.25);
+  --accent-surface: rgba(168, 85, 247, 0.08);
+  --accent-surface-hover: rgba(168, 85, 247, 0.14);
+  --text-primary: #f0ecf8;
+  --text-secondary: rgba(240, 236, 248, 0.6);
+  --text-tertiary: rgba(240, 236, 248, 0.3);
+  --text-accent: #d8b4fe;
+  --neon-glow: 0 0 20px rgba(168, 85, 247, 0.15), 0 0 60px rgba(168, 85, 247, 0.05);
+  --neon-glow-strong: 0 0 20px rgba(168, 85, 247, 0.3), 0 0 60px rgba(168, 85, 247, 0.1), 0 0 100px rgba(168, 85, 247, 0.05);
+  --gradient-accent: linear-gradient(135deg, #a855f7, #8b5cf6);
+  --gradient-hero: linear-gradient(135deg, rgba(168, 85, 247, 0.12) 0%, rgba(139, 92, 246, 0.06) 100%);
+  --scrollbar-thumb: rgba(168, 85, 247, 0.2);
+}
+
+/* ── NEON GREEN ─────────────────────────────────────────────────────────── */
+[data-theme="neon-green"] {
+  --bg-base: #060f08;
+  --bg-surface: #0a180e;
+  --bg-surface-2: #0e2214;
+  --bg-surface-3: #132d1a;
+  --bg-elevated: #16331e;
+  --border-subtle: rgba(34, 197, 94, 0.08);
+  --border-default: rgba(34, 197, 94, 0.15);
+  --border-accent: rgba(34, 197, 94, 0.35);
+  --accent: #22c55e;
+  --accent-bright: #4ade80;
+  --accent-glow: rgba(34, 197, 94, 0.25);
+  --accent-surface: rgba(34, 197, 94, 0.08);
+  --accent-surface-hover: rgba(34, 197, 94, 0.14);
+  --text-primary: #ecf8f0;
+  --text-secondary: rgba(236, 248, 240, 0.6);
+  --text-tertiary: rgba(236, 248, 240, 0.3);
+  --text-accent: #86efac;
+  --neon-glow: 0 0 20px rgba(34, 197, 94, 0.15), 0 0 60px rgba(34, 197, 94, 0.05);
+  --neon-glow-strong: 0 0 20px rgba(34, 197, 94, 0.3), 0 0 60px rgba(34, 197, 94, 0.1), 0 0 100px rgba(34, 197, 94, 0.05);
+  --gradient-accent: linear-gradient(135deg, #22c55e, #16a34a);
+  --gradient-hero: linear-gradient(135deg, rgba(34, 197, 94, 0.12) 0%, rgba(22, 163, 74, 0.06) 100%);
+  --scrollbar-thumb: rgba(34, 197, 94, 0.2);
+}
+
+/* ── 🔥 DYLANDOS ULTRA — Neon Jet Black + Grey + Glitter Yellow + Hot Pink + Orange ── */
+[data-theme="dylandos-ultra"] {
+  --bg-base: #000000;
+  --bg-surface: #0f0f0f;
+  --bg-surface-2: #1a1a1a;
+  --bg-surface-3: #242424;
+  --bg-elevated: #2e2e2e;
+  --border-subtle: rgba(255, 235, 0, 0.12);
+  --border-default: rgba(255, 235, 0, 0.22);
+  --border-accent: rgba(255, 235, 0, 0.45);
+  --accent: #ffeb00;
+  --accent-bright: #fff44f;
+  --accent-glow: rgba(255, 235, 0, 0.35);
+  --accent-surface: rgba(255, 235, 0, 0.1);
+  --accent-surface-hover: rgba(255, 235, 0, 0.18);
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.75);
+  --text-tertiary: rgba(255, 255, 255, 0.4);
+  --text-accent: #ff1d8e;
+  --neon-glow: 0 0 25px rgba(255, 235, 0, 0.2), 0 0 70px rgba(255, 20, 147, 0.08);
+  --neon-glow-strong: 0 0 30px rgba(255, 235, 0, 0.4), 0 0 80px rgba(255, 20, 147, 0.15), 0 0 120px rgba(255, 107, 0, 0.08);
+  --gradient-accent: linear-gradient(135deg, #ffeb00, #ff1d8e, #ff6b00);
+  --gradient-hero: linear-gradient(135deg, rgba(255, 235, 0, 0.15) 0%, rgba(255, 29, 142, 0.1) 50%, rgba(255, 107, 0, 0.08) 100%);
+  --scrollbar-thumb: rgba(255, 235, 0, 0.25);
+}
+
+/* ── 🔥 DYLANDOS FIRE — Neon Jet Black + Grey + Hot Pink + Lamborgini Orange ── */
+[data-theme="dylandos-fire"] {
+  --bg-base: #000000;
+  --bg-surface: #0a0a0a;
+  --bg-surface-2: #141414;
+  --bg-surface-3: #1f1f1f;
+  --bg-elevated: #292929;
+  --border-subtle: rgba(255, 107, 0, 0.12);
+  --border-default: rgba(255, 107, 0, 0.22);
+  --border-accent: rgba(255, 107, 0, 0.45);
+  --accent: #ff6b00;
+  --accent-bright: #ff8533;
+  --accent-glow: rgba(255, 107, 0, 0.35);
+  --accent-surface: rgba(255, 107, 0, 0.1);
+  --accent-surface-hover: rgba(255, 107, 0, 0.18);
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.75);
+  --text-tertiary: rgba(255, 255, 255, 0.4);
+  --text-accent: #ff1d8e;
+  --neon-glow: 0 0 25px rgba(255, 107, 0, 0.2), 0 0 70px rgba(255, 29, 142, 0.1);
+  --neon-glow-strong: 0 0 30px rgba(255, 107, 0, 0.4), 0 0 80px rgba(255, 29, 142, 0.2), 0 0 120px rgba(255, 107, 0, 0.1);
+  --gradient-accent: linear-gradient(135deg, #ff6b00, #ff1d8e);
+  --gradient-hero: linear-gradient(135deg, rgba(255, 107, 0, 0.15) 0%, rgba(255, 29, 142, 0.12) 100%);
+  --scrollbar-thumb: rgba(255, 107, 0, 0.25);
+}
+
+/* ── Theme utility classes ───────────────────────────────────────────────── */
+.theme-bg-base {
+  background-color: var(--bg-base);
+}
+
+.theme-bg-surface {
+  background-color: var(--bg-surface);
+}
+
+.theme-bg-surface-2 {
+  background-color: var(--bg-surface-2);
+}
+
+.theme-bg-elevated {
+  background-color: var(--bg-elevated);
+}
+
+.theme-border {
+  border-color: var(--border-default);
+}
+
+.theme-border-accent {
+  border-color: var(--border-accent);
+}
+
+.theme-text {
+  color: var(--text-primary);
+}
+
+.theme-text-secondary {
+  color: var(--text-secondary);
+}
+
+.theme-text-tertiary {
+  color: var(--text-tertiary);
+}
+
+.theme-text-accent {
+  color: var(--text-accent);
+}
+
+.theme-accent {
+  color: var(--accent);
+}
+
+.theme-accent-bg {
+  background-color: var(--accent);
+}
+
+.theme-glow {
+  box-shadow: var(--neon-glow);
+}
+
+.theme-glow-strong {
+  box-shadow: var(--neon-glow-strong);
+}
+
+.theme-gradient {
+  background: var(--gradient-accent);
+}
+
+.theme-gradient-hero {
+  background: var(--gradient-hero);
+}
+
+.theme-accent-surface {
+  background-color: var(--accent-surface);
+}
+
+.theme-accent-surface-hover:hover {
+  background-color: var(--accent-surface-hover);
+}
+
+.hover\:theme-text-accent:hover {
+  color: var(--text-accent);
+}
+
+.hover\:theme-border-accent:hover {
+  border-color: var(--border-accent);
+}
+
+/* Neon text glow effect */
+.neon-text {
+  color: var(--accent-bright);
+  text-shadow: 0 0 7px var(--accent-glow), 0 0 20px var(--accent-glow), 0 0 40px var(--accent-glow);
+}
+
+.neon-text-subtle {
+  color: var(--accent);
+  text-shadow: 0 0 10px var(--accent-glow);
+}
+
+.neon-border {
+  border-color: var(--border-accent);
+  box-shadow: var(--neon-glow), inset 0 0 20px rgba(0, 0, 0, 0.3);
+}
+
+.neon-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--neon-glow);
+  transition: all 0.3s ease;
+}
+
+.neon-card:hover {
+  border-color: var(--border-accent);
+  box-shadow: var(--neon-glow-strong);
+  transform: translateY(-1px);
+}
+
+.neon-btn {
+  background: var(--gradient-accent);
+  color: #000;
+  font-weight: 700;
+  box-shadow: var(--neon-glow);
+  transition: all 0.2s ease;
+}
+
+.neon-btn:hover {
+  box-shadow: var(--neon-glow-strong);
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+/* ── Custom scrollbar  ───────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb, rgba(255, 255, 255, 0.1));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent, rgba(255, 255, 255, 0.2));
+}
+
+/* ── Base ────────────────────────────────────────────────────────────── */
+html,
+body,
+#root {
+  @apply h-full m-0 p-0 text-white overflow-hidden;
+  /* CRITICAL: keep transparent so the MPV backing window (below the Electron
+     transparent mainWin) shines through. The App shell div supplies the opaque
+     theme background via `theme-bg-base` when NOT in player mode. */
+  background-color: transparent;
+  color: var(--text-primary, #f0f4f8);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+html.mpv-transparent-backdrop,
+body.mpv-transparent-backdrop,
+#root.mpv-transparent-backdrop {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* ── Drag regions for custom title bar ───────────────────────────────── */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ── Video element resets ────────────────────────────────────────────── */
+video::-webkit-media-controls {
+  display: none !important;
+}
+
+video::-webkit-media-controls-enclosure {
+  display: none !important;
+}
+
+/* ── Subtitle styling via CSS custom properties ──────────────────────── */
+video::cue {
+  font-size: var(--subtitle-font-size, 24px);
+  color: var(--subtitle-color, #ffffff);
+  background-color: var(--subtitle-bg, rgba(0, 0, 0, 0.6));
+  text-shadow: var(--subtitle-outline, 1px 1px 2px rgba(0, 0, 0, 0.8));
+  font-family: 'Inter', -apple-system, sans-serif;
+  line-height: 1.4;
+  padding: 2px 6px;
+}
+
+/* ── Range input styling ──────────────────────────────────────────────── */
+input[type="range"] {
+  -webkit-appearance: none;
+  background: transparent;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+}
+
+/* ── Focus visible ring ──────────────────────────────────────────────── */
+*:focus-visible {
+  outline: 2px solid var(--accent, rgba(0, 255, 255, 0.5));
+  outline-offset: 2px;
+}
+
+/* ── Animations ──────────────────────────────────────────────────────── */
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--accent-glow, rgba(0, 255, 255, 0.3));
+  }
+
+  50% {
+    box-shadow: 0 0 12px 4px var(--accent-glow, rgba(0, 255, 255, 0.15));
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes neon-flicker {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  92% {
+    opacity: 1;
+  }
+
+  93% {
+    opacity: 0.8;
+  }
+
+  94% {
+    opacity: 1;
+  }
+
+  96% {
+    opacity: 0.9;
+  }
+
+  97% {
+    opacity: 1;
+  }
+}
+
+.animate-neon-flicker {
+  animation: neon-flicker 4s ease-in-out infinite;
+}
+
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.animate-gradient {
+  background-size: 200% 200%;
+  animation: gradient-shift 6s ease infinite;
+}
+
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* ── Glass morphism ──────────────────────────────────────────────────── */
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+}
+
+.glass-strong {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--border-default);
+}

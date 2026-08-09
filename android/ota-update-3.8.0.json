@@ -1,0 +1,17 @@
+{
+  "versionCode": 45,
+  "versionName": "3.8.0",
+  "releaseNotes": "v3.8.0: POSTER IMAGE FIX — All movie, series, and channel images now load correctly. Root cause was Coil 2.7.0 creating its own OkHttpClient using OkHttp 4.x API patterns which break against the OkHttp 5.0.0-alpha.14 classpath (NoSuchMethodError on removed APIs). Fix: Coil now uses the app's pre-built, working OkHttp 5 client via callFactory injection. Also added Coil ProGuard keep rules (prevented R8 stripping Coil's ServiceLoader factories in release builds) and a network_security_config.xml for reliable HTTP cleartext on all Android/FireOS devices. AsyncImage calls in Movies and Series screens now show proper dark fallback placeholders on load failure instead of transparent nothing.",
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_LINK/app-firestick-release.apk?dl=1",
+      "apkSha256": "2fbe846afb25cda9c82dd624f45c21fedeb545882a0b2390af2e659f55a251ff",
+      "apkSizeBytes": 59215264
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_PREMIUM_LINK/app-premium-release.apk?dl=1",
+      "apkSha256": "96312a3c27bea003c45c912f547a0c119566191e12f8fbf295b129cd7b9ddb4d",
+      "apkSizeBytes": 60473951
+    }
+  }
+}

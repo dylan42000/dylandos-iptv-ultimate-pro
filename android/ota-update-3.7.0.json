@@ -1,0 +1,17 @@
+{
+  "versionCode": 44,
+  "versionName": "3.7.0",
+  "releaseNotes": "v3.7.0: Image loading pipeline overhaul — Coil EventListener now surfaces all load failures to Logcat for instant diagnosis. PosterCard and ChannelCard show a dark gray fallback box on error instead of rendering invisible. Cleartext traffic confirmed enabled for HTTP IPTV image servers. MemoryBudgetManager verified: image cache floor at 16 MB (never 0). 720p downsampling interceptor confirmed chain-safe.",
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_LINK/app-firestick-release.apk?dl=1",
+      "apkSha256": "e59dcedb5bd12130e6c465a8cdb6109676ec6b9ae56cb6150b23ccd2cbaec8c2",
+      "apkSizeBytes": 59098910
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_PREMIUM_LINK/app-premium-release.apk?dl=1",
+      "apkSha256": "0fe9c27221d3c475e57c66640b993975a5c55a699a809eededebf148693d285a",
+      "apkSizeBytes": 60357465
+    }
+  }
+}

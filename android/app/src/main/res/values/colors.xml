@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- DYLANDOS IPTV ULTIMATE - Color Resources -->
+
+    <!-- Background Colors -->
+    <color name="bg_base">#080808</color>
+    <color name="bg_surface">#0A0E18</color>
+    <color name="bg_surface_2">#0E1422</color>
+    <color name="bg_surface_3">#131A2D</color>
+    <color name="bg_elevated">#161E33</color>
+
+    <!-- Accent Colors (Neon Cyan) -->
+    <color name="accent">#FF0076</color>
+    <color name="accent_bright">#FF3399</color>
+    <color name="accent_glow">#40FF0076</color>
+    <color name="accent_surface">#14FF0076</color>
+    <color name="accent_surface_hover">#24FF0076</color>
+
+    <!-- Text Colors -->
+    <color name="text_primary">#F0F4F8</color>
+    <color name="text_secondary">#99F0F4F8</color>
+    <color name="text_tertiary">#4DF0F4F8</color>
+    <color name="text_accent">#67E8F9</color>
+
+    <!-- Border Colors -->
+    <color name="border_subtle">#1406B6D4</color>
+    <color name="border_default">#2606B6D4</color>
+    <color name="border_accent">#5906B6D4</color>
+
+    <!-- Status Colors -->
+    <color name="status_success">#10B981</color>
+    <color name="status_warning">#F59E0B</color>
+    <color name="status_error">#EF4444</color>
+    <color name="status_info">#3B82F6</color>
+
+    <!-- Player Overlay -->
+    <color name="player_overlay">#D9000000</color>
+    <color name="player_control_bg">#80161E33</color>
+
+    <!-- Standard Android Colors -->
+    <color name="black">#000000</color>
+    <color name="white">#FFFFFF</color>
+</resources>

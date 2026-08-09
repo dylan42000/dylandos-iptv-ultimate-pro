@@ -1,0 +1,25 @@
+{
+  "versionCode": 59,
+  "version": "4.6.0",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "PERF: Coil image downsampling — all poster grids now decode at 150×225 px (was full CDN resolution). Eliminates GC thrashing and bitmap OOM on Firestick 1GB/2GB devices during rapid scroll.",
+    "PERF: Paging 3 pageSize reduced from 60 → 20 items (initialLoadSize also capped at 20). Prevents 180-item burst loads that previously caused 2–3 second UI freezes on FireOS devices.",
+    "PERF: Favorites recomposition fix — favoriteMovieIds and favoriteSeriesIds hoisted to dedicated StateFlow<Set<Int>> in their ViewModels, decoupled from the main uiState. Adding or removing a favorite now recomposes only the affected poster card instead of the entire grid.",
+    "PERF: yield() cooperative suspension added after heavy Gson JSON parsing (VOD streams, Series) in XtreamRepository and between filterMovies/filterSeries passes in ViewModels. Prevents IO thread pool starvation and main-thread jank during large provider loads.",
+    "PERF: HomeScreen rail cards (movie posters 110×155 px, channel logos 80×80 px) now use bounded ImageRequest.size() — eliminates redundant full-res decodes in horizontal scroll rails."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_DROPBOX_DIRECT_LINK_FOR_FIRESTICK_APK",
+      "apkSize": 0,
+      "sha256": ""
+    },
+    "premium": {
+      "apkUrl": "REPLACE_WITH_DROPBOX_DIRECT_LINK_FOR_PREMIUM_APK",
+      "apkSize": 0,
+      "sha256": ""
+    }
+  }
+}

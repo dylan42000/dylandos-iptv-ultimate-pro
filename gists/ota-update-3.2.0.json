@@ -1,0 +1,41 @@
+{
+  "version": "3.2.0",
+  "versionCode": 39,
+  "releaseDate": "2026-04-28",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "Player: Fixed random app crashes caused by D-pad reaching unreachable Close button (controlCount 8→9)",
+    "Player: Firestick 30-min screen sleep permanently defeated — SCREEN_BRIGHT_WAKE_LOCK + FLAG_KEEP_SCREEN_ON + FLAG_TURN_SCREEN_ON keeps display lit for entire playback session",
+    "Movies: Fixed category rail not filtering movies — Xtream Codes float category_id (12.0) now normalized to integer string (12) matching category list IDs",
+    "Movies: Firestick D-pad hover-select on category rail — movies update instantly as you navigate (Netflix/Prime-style), no OK press needed",
+    "Themes: Added 6 new intense neon UI themes — Neon Hot Pink, Neon Lamborghini Orange, Neon Smoke Grey, Neon Smoke White, Neon Charcoal Black, Neon Baby Blue",
+    "Settings: Subtitle outline color picker now wired — 8 color swatches (Black, Dark Navy, Dark Red, Dark Purple, Dark Green, Charcoal, White, Hot Pink)",
+    "Settings: Subtitle colors fully wired to LibVLC freetype renderer — size, color, outline color, and background opacity all apply on next stream open",
+    "DVR: Per-provider recording subfolders — recordings now organized as DVR/<server-hostname>/<filename>.ts for clean multi-account library management"
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "PASTE_FIRESTICK_DROPBOX_URL_HERE",
+      "apkSize": 59056078,
+      "sha256": "C2700518695D50DBF492E71E512B1CB6C4C787CDA105E79816AD3ACFA59EA5CE",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["armeabi-v7a"]
+    },
+    "premium": {
+      "apkUrl": "PASTE_PREMIUM_DROPBOX_URL_HERE",
+      "apkSize": 60314677,
+      "sha256": "E4A24713FFBC3F2EE7FB7C15D6DF63CB18699B1E771CFF5EE2B241BACD4FBD9A",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["arm64-v8a"]
+    }
+  },
+  "apkUrl": "PASTE_FIRESTICK_DROPBOX_URL_HERE",
+  "apkSize": 59056078,
+  "sha256": "C2700518695D50DBF492E71E512B1CB6C4C787CDA105E79816AD3ACFA59EA5CE",
+  "notes": "Steps: 1) Upload app-firestick-release.apk and app-premium-release.apk to Dropbox, get direct dl=1 links. 2) Run: Get-FileHash app-firestick-release.apk -Algorithm SHA256 and Get-FileHash app-premium-release.apk -Algorithm SHA256. 3) Fill in apkUrl, apkSize (bytes), sha256 for both flavors AND the top-level apkUrl/apkSize/sha256 (Firestick). 4) Save this file as update.json in gist 6056e65b41641393abf585cecbd92d07."
+}

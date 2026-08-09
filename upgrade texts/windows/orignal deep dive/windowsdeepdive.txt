@@ -1,0 +1,2792 @@
+# 🏆 DYLANDOS IPTV ULTIMATE — WINDOWS
+## Final Deep Dive: Gap Analysis & World-Class Completion Plan
+### Everything Remaining to Hit Top-3 IPTV Player Status
+
+---
+
+> **Reading the manifest carefully:** Your core is now genuinely solid. Engine selection is fixed, EPG is wired, reconnect works, PiP and mediaSession are done. What separates you from top-3 right now is a collection of **partially-wired settings that don't actually do anything**, **missing user-facing premium features** (EPG grid, seek thumbnails, auto-next, toast feedback, shortcuts), **unwired components** (ProfileSelectionDialog), and **distribution/update** infrastructure. Every section below has precise code. Let's close every gap.
+
+---
+
+## 📊 MASTER GAP ANALYSIS TABLE
+
+| Feature | Status in Manifest | Impact on Top-3 | Fix Complexity |
+|---|---|---|---|
+| ProfileSelectionDialog wiring | Component exists, not in App.tsx | 🔴 High | Low — just wire it |
+| Live reconnect settings wiring | Hardcoded 5/2000ms | 🟠 Medium | Low |
+| liveFormat setting enforcement | URL heuristic only | 🟠 Medium | Low |
+| Settings → main process sync | localStorage never syncs to main | 🔴 High | Medium |
+| TMDB enrichment completion | tmdb.ts exists, UI partial | 🔴 High | Medium |
+| EPG on-disk cache | No persistent cache | 🟠 Medium | Medium |
+| Series episode ID collisions | Partial fix | 🟠 Medium | Low |
+| Hardware decode wiring | Setting exists, ignored | 🟠 Medium | Medium |
+| Auto-updater wiring | Package present, unwired | 🔴 High (distribution) | Medium |
+| EPG Grid view | Not in manifest at all | 🔴 High (UI quality) | High |
+| Seek thumbnail scrubbing | Not in manifest | 🔴 High (VOD quality) | Medium |
+| Auto-play next episode | Not in manifest | 🔴 High (series UX) | Medium |
+| Toast notification system | Not in manifest | 🟠 Medium | Low |
+| Keyboard shortcut system | Not in manifest | 🔴 High (power users) | Medium |
+| Stream health indicator | Not in manifest | 🟠 Medium | Low |
+| Channel number jump OSD | Not in manifest | 🟠 Medium | Low |
+| Worker-threaded VOD filter | useMemo only | 🟠 Medium (50k+ items) | Medium |
+| Logo cache service | No caching | 🟠 Medium | Medium |
+| SMTC position state | mediaSession exists, position missing | 🟠 Medium | Low |
+| Windows Jump Lists | Not in manifest | 🟡 Low-Medium | Low |
+| Subtitle renderer (custom CSS) | Settings exist, not applied | 🟠 Medium | Low |
+| Multi-view / side-by-side | Not in manifest | 🟡 Low | High |
+| Full-screen EPG overlay | Not in manifest | 🔴 High | Medium |
+| Watchlist/My List feature | Not in manifest | 🔴 High (UX) | Low |
+| DVR | Explicitly TODO | Skip per your request | — |
+| MPV integration | Missing | Optional for now | Very High |
+
+---
+
+## 🔴 TIER 1 — WIRING FIXES (HIGH IMPACT, LOW EFFORT)
+
+These are already built — they just aren't connected. Fix these first.
+
+---
+
+### FIX 1 — Wire ProfileSelectionDialog into App.tsx
+
+The component exists and is feature-complete. It just isn't imported or rendered:
+
+```typescript
+// App.tsx — Add ProfileSelectionDialog wiring
+
+import { ProfileSelectionDialog } from './components/ProfileSelectionDialog';
+
+// Add to App state:
+const [showProfileDialog, setShowProfileDialog] = useState(false);
+const [profiles, setProfiles] = useState<XtreamProfile[]>([]);
+const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+
+// On mount — check if we have any profiles; if not, show dialog
+useEffect(() => {
+  const savedProfiles = loadProfiles();         // from storage.ts
+  const savedActiveId = loadActiveProfileId();  // from storage.ts
+  setProfiles(savedProfiles);
+  setActiveProfileId(savedActiveId);
+
+  if (savedProfiles.length === 0) {
+    // No profiles at all — force dialog open
+    setShowProfileDialog(true);
+  } else if (savedActiveId) {
+    const activeProfile = savedProfiles.find(p => p.id === savedActiveId);
+    if (activeProfile) {
+      xtream.connect(activeProfile);
+    }
+  } else {
+    // Profiles exist but none selected — show dialog
+    setShowProfileDialog(true);
+  }
+}, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+// Profile management handlers
+const handleSelectProfile = useCallback((profile: XtreamProfile) => {
+  setActiveProfileId(profile.id);
+  saveActiveProfileId(profile.id);  // from storage.ts
+  xtream.connect(profile);
+  setShowProfileDialog(false);
+}, [xtream]);
+
+const handleAddProfile = useCallback(async (profileData: Omit<XtreamProfile, 'id'>) => {
+  const newProfile: XtreamProfile = {
+    ...profileData,
+    id: `profile_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+  };
+  const updated = [...profiles, newProfile];
+  setProfiles(updated);
+  saveProfiles(updated);    // from storage.ts
+  handleSelectProfile(newProfile);
+}, [profiles, handleSelectProfile]);
+
+const handleDeleteProfile = useCallback((id: string) => {
+  const updated = profiles.filter(p => p.id !== id);
+  setProfiles(updated);
+  saveProfiles(updated);
+  if (activeProfileId === id) {
+    setActiveProfileId(null);
+    saveActiveProfileId(null);
+    if (updated.length > 0) {
+      setShowProfileDialog(true);
+    }
+  }
+}, [profiles, activeProfileId]);
+
+// In the JSX return — add BEFORE the main layout:
+return (
+  <>
+    {/* Profile Selection Dialog */}
+    <ProfileSelectionDialog
+      profiles={profiles}
+      activeProfileId={activeProfileId}
+      onSelectProfile={handleSelectProfile}
+      onAddProfile={handleAddProfile}
+      onDeleteProfile={handleDeleteProfile}
+      isOpen={showProfileDialog}
+      onClose={() => profiles.length > 0 && setShowProfileDialog(false)}
+    />
+
+    {/* Add profile switch button to TitleBar or Sidebar */}
+    {/* ... rest of app layout ... */}
+  </>
+);
+```
+
+Add a "Switch Profile" button to the Sidebar:
+
+```typescript
+// Sidebar.tsx — Add profile switcher at bottom
+
+// At the bottom of the sidebar, above the settings button:
+<button
+  onClick={onSwitchProfile}
+  className="flex items-center gap-3 w-full px-3 py-2.5 text-white/50 
+    hover:text-white hover:bg-white/5 rounded-xl transition-all group"
+  title={isCollapsed ? 'Switch Profile' : undefined}
+>
+  <div className="w-7 h-7 rounded-full bg-cyan-500/20 flex items-center justify-center shrink-0">
+    <User size={14} className="text-cyan-400" />
+  </div>
+  {!isCollapsed && (
+    <div className="flex-1 min-w-0 text-left">
+      <p className="text-xs font-medium text-white/80 truncate">
+        {activeProfile?.name || activeProfile?.username || 'No Profile'}
+      </p>
+      <p className="text-[10px] text-white/30">Switch Profile</p>
+    </div>
+  )}
+</button>
+```
+
+---
+
+### FIX 2 — Wire Live Reconnect Settings into VideoPlayer.tsx
+
+```typescript
+// VideoPlayer.tsx — Replace hardcoded reconnect constants
+
+// ❌ CURRENT (hardcoded):
+const scheduleReconnect = useCallback((url: string, title: string) => {
+  const MAX_ATTEMPTS = 5;       // hardcoded
+  const BASE_DELAY = 2000;      // hardcoded
+  // ...
+}, []);
+
+// ✅ FIXED — read from settings props:
+interface VideoPlayerProps {
+  // ... existing props ...
+  settings: AppSettings;  // Add this if not already present
+}
+
+const scheduleReconnect = useCallback((url: string, title: string) => {
+  const MAX_ATTEMPTS = settings.liveReconnectMaxAttempts ?? 5;
+  const BASE_DELAY = settings.liveReconnectBaseDelayMs ?? 2000;
+  const MAX_DELAY = 30000;
+
+  if (reconnectAttemptRef.current >= MAX_ATTEMPTS) {
+    setPlayerState(prev => ({
+      ...prev,
+      isLoading: false,
+      error: `Stream unavailable after ${MAX_ATTEMPTS} reconnect attempts. Check your connection or try a different channel.`,
+    }));
+    reconnectAttemptRef.current = 0;
+    return;
+  }
+
+  const attempt = ++reconnectAttemptRef.current;
+  const delay = Math.min(BASE_DELAY * Math.pow(2, attempt - 1), MAX_DELAY);
+
+  setPlayerState(prev => ({
+    ...prev,
+    isLoading: true,
+    error: null,
+    title: `${title} — Reconnecting (${attempt}/${MAX_ATTEMPTS})...`,
+  }));
+
+  reconnectTimerRef.current = setTimeout(() => {
+    loadStream(url, title);
+  }, delay);
+}, [settings.liveReconnectMaxAttempts, settings.liveReconnectBaseDelayMs, loadStream]);
+```
+
+---
+
+### FIX 3 — Wire liveFormat Setting into Stream URL Generation
+
+```typescript
+// VideoPlayer.tsx + xtreamApi.ts — Enforce liveFormat setting
+
+// xtreamApi.ts — Update getLiveStreamUrl to accept format override
+getLiveStreamUrl(streamId: number, formatOverride?: 'ts' | 'm3u8'): string {
+  const format = formatOverride ?? 'ts';
+  if (format === 'm3u8') {
+    return `${this.serverUrl}/live/${this.username}/${this.password}/${streamId}.m3u8`;
+  }
+  return `${this.serverUrl}/live/${this.username}/${this.password}/${streamId}.ts`;
+}
+
+// VideoPlayer.tsx or LiveTV.tsx — when requesting a stream URL:
+const getStreamUrl = useCallback((channel: XtreamChannel): string => {
+  // settings.liveFormat: 'ts' | 'm3u8' | 'auto'
+  if (settings.liveFormat === 'auto') {
+    // Auto: prefer m3u8 if provider supports it (can be detected from channel data)
+    // Fallback: use ts (most compatible)
+    return xtreamApi.getLiveStreamUrl(channel.stream_id, 'ts');
+  }
+  return xtreamApi.getLiveStreamUrl(channel.stream_id, settings.liveFormat);
+}, [settings.liveFormat, xtreamApi]);
+```
+
+---
+
+### FIX 4 — Settings → Main Process Sync (minimizeToTray & startWithWindows)
+
+This is the inconsistency where settings live in `localStorage` but main.cjs reads a file:
+
+```typescript
+// storage.ts — Add sync function that writes to both localStorage AND electron IPC
+
+export const saveSettings = async (settings: AppSettings): Promise<void> => {
+  // 1. Save to localStorage (renderer persistence)
+  safeSet('dylandos:settings', settings);
+
+  // 2. Sync specific main-process-relevant settings via IPC
+  if (window.electronAPI) {
+    // These settings affect main process behavior — push them immediately
+    try {
+      await window.electronAPI.fs.writeData(
+        'settings.json',
+        JSON.stringify({
+          minimizeToTray: settings.minimizeToTray,
+          startWithWindows: settings.startWithWindows,
+          confirmOnExit: settings.confirmOnExit,
+          osdTimeoutMs: settings.osdTimeoutMs,
+        }, null, 2)
+      );
+    } catch (err) {
+      console.warn('[storage] Failed to sync settings to main process:', err);
+    }
+  }
+};
+```
+
+Update `electron/main.cjs` to handle settings pushed from renderer:
+
+```javascript
+// electron/main.cjs — Add settings sync IPC + apply immediately
+
+const SETTINGS_FILE = 'settings.json';
+let appSettings = { minimizeToTray: false, startWithWindows: false, confirmOnExit: false };
+
+// Load on startup
+async function loadMainSettings() {
+  try {
+    const filePath = path.join(app.getPath('userData'), 'data', SETTINGS_FILE);
+    const raw = await fs.readFile(filePath, 'utf8');
+    appSettings = { ...appSettings, ...JSON.parse(raw) };
+  } catch { /* use defaults */ }
+}
+
+// IPC: renderer pushes updated settings
+ipcMain.handle('settings:sync', async (_e, patch) => {
+  appSettings = { ...appSettings, ...patch };
+  
+  // Apply immediately
+  if ('startWithWindows' in patch) {
+    app.setLoginItemSettings({
+      openAtLogin: patch.startWithWindows,
+      name: 'DYLANDOS IPTV ULTIMATE',
+    });
+  }
+  
+  // Persist
+  const filePath = path.join(app.getPath('userData'), 'data', SETTINGS_FILE);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(appSettings, null, 2));
+});
+
+// In win.on('close') — use live appSettings instead of file read:
+win.on('close', (e) => {
+  if (appSettings.minimizeToTray && !app.isQuitting) {
+    e.preventDefault();
+    win.hide();
+    if (!tray) setupTray();
+  } else if (appSettings.confirmOnExit && !app.isQuitting) {
+    // Don't intercept here — let renderer handle the confirm dialog
+    // Renderer listens for 'window:before-close' and calls window:close when confirmed
+    e.preventDefault();
+    win.webContents.send('window:before-close');
+  }
+});
+```
+
+Add to preload.cjs whitelist and expose:
+
+```javascript
+// electron/preload.cjs
+'settings:sync': (patch) => ipcRenderer.invoke('settings:sync', patch),
+```
+
+Update `useSettings.ts`:
+
+```typescript
+// hooks/useSettings.ts — Auto-sync to main on relevant setting changes
+
+const updateSettings = useCallback(async (patch: Partial<AppSettings>) => {
+  const newSettings = { ...settingsRef.current, ...patch };
+  settingsRef.current = newSettings;
+  setSettings(newSettings);
+  
+  // Save to localStorage
+  saveSettings(newSettings);
+  
+  // Sync main-process settings immediately
+  const mainProcessKeys: (keyof AppSettings)[] = [
+    'minimizeToTray', 'startWithWindows', 'confirmOnExit'
+  ];
+  const mainPatch = Object.fromEntries(
+    mainProcessKeys
+      .filter(k => k in patch)
+      .map(k => [k, newSettings[k]])
+  );
+  
+  if (Object.keys(mainPatch).length > 0) {
+    window.electronAPI?.settingsSync?.(mainPatch);
+  }
+}, []);
+```
+
+---
+
+### FIX 5 — Series Episode ID Collision Fix
+
+```typescript
+// hooks/useWatchProgress.ts — Fix episode key collision
+
+// ❌ CURRENT: uses streamId alone — collides across series
+const getProgressKey = (streamId: number) => `stream_${streamId}`;
+
+// ✅ FIXED: compound key for episodes
+export const getEpisodeProgressKey = (
+  seriesId: number,
+  season: number,
+  episode: number
+): string => `series_${seriesId}_s${season}_e${episode}`;
+
+export const getMovieProgressKey = (streamId: number): string => 
+  `movie_${streamId}`;
+
+export const getLiveProgressKey = (streamId: number): string =>
+  `live_${streamId}`; // for last-watched channel tracking
+
+// Update all call sites to use the correct key function:
+// In SeriesDetail.tsx:
+const key = getEpisodeProgressKey(series.series_id, episode.season, episode.episode_num);
+
+// In Movies.tsx / VodGrid:  
+const key = getMovieProgressKey(movie.stream_id);
+```
+
+---
+
+## 🔴 TIER 2 — MISSING PREMIUM FEATURES (TOP-3 REQUIREMENTS)
+
+These are the features users expect from world-class IPTV players. Without them you're competing at tier 2, not tier 1.
+
+---
+
+### FEATURE 1 — Complete EPG Grid View (Full Timeline)
+
+This is one of the biggest differentiators. TiviMate's EPG grid is beloved. You need it:
+
+```typescript
+// components/EpgGrid.tsx — Complete production EPG timeline grid
+
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
+import { XtreamChannel } from '../types/xtream';
+import { EPGProgram } from '../types/epg';
+import { ChevronLeft, ChevronRight, Clock } from 'lucide-react';
+
+interface EpgGridProps {
+  channels: XtreamChannel[];
+  epgData: Map<string, EPGProgram[]>;
+  getNowPlaying: (channelId: string) => EPGProgram | null;
+  onChannelClick: (channel: XtreamChannel) => void;
+  onProgramClick?: (program: EPGProgram, channel: XtreamChannel) => void;
+  currentTime?: Date;
+  timeFormat?: '12h' | '24h';
+}
+
+const CHANNEL_COL_W = 176;   // px — channel name column
+const HOUR_W = 220;           // px per hour
+const ROW_H = 60;             // px per channel row
+const HEADER_H = 40;          // px — time axis height
+const MIN_PGM_W = 24;         // px — minimum program block width
+
+// Hours to display (4am → 4am next day = 24h window)
+const TOTAL_HOURS = 24;
+const GRID_W = HOUR_W * TOTAL_HOURS; // total scrollable width
+
+const formatTimeLabel = (hour: number, format: '12h' | '24h'): string => {
+  if (format === '24h') return `${hour.toString().padStart(2, '0')}:00`;
+  const h = hour % 12 || 12;
+  return `${h}:00 ${hour < 12 ? 'AM' : 'PM'}`;
+};
+
+const getXForTime = (date: Date, dayStart: Date): number => {
+  const elapsed = date.getTime() - dayStart.getTime();
+  const hours = elapsed / (1000 * 60 * 60);
+  return hours * HOUR_W;
+};
+
+export const EpgGrid: React.FC<EpgGridProps> = ({
+  channels,
+  epgData,
+  getNowPlaying,
+  onChannelClick,
+  onProgramClick,
+  currentTime = new Date(),
+  timeFormat = '24h',
+}) => {
+  const headerScrollRef = useRef<HTMLDivElement>(null);
+  const bodyScrollRef = useRef<HTMLDivElement>(null);
+  const channelColRef = useRef<HTMLDivElement>(null);
+  const hasScrolledToNow = useRef(false);
+
+  // Day start: today at midnight
+  const dayStart = useMemo(() => {
+    const d = new Date(currentTime);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, [currentTime.toDateString()]);
+
+  // Current time X position in the grid
+  const nowX = useMemo(() => getXForTime(currentTime, dayStart), [currentTime, dayStart]);
+
+  // Time axis slots (every 30 minutes)
+  const timeSlots = useMemo(() => {
+    const slots: { x: number; label: string; isHour: boolean }[] = [];
+    for (let h = 0; h < TOTAL_HOURS; h++) {
+      slots.push({
+        x: h * HOUR_W,
+        label: formatTimeLabel(h, timeFormat),
+        isHour: true,
+      });
+      slots.push({
+        x: h * HOUR_W + HOUR_W / 2,
+        label: timeFormat === '24h' ? `${h.toString().padStart(2, '0')}:30` : `${h % 12 || 12}:30`,
+        isHour: false,
+      });
+    }
+    return slots;
+  }, [timeFormat]);
+
+  // Scroll to now on mount
+  useEffect(() => {
+    if (hasScrolledToNow.current || !bodyScrollRef.current) return;
+    const targetX = Math.max(0, nowX - 100); // 100px before now
+    bodyScrollRef.current.scrollLeft = targetX;
+    if (headerScrollRef.current) headerScrollRef.current.scrollLeft = targetX;
+    hasScrolledToNow.current = true;
+  }, [nowX]);
+
+  // Sync header scroll with body scroll
+  const handleBodyScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const scrollLeft = (e.target as HTMLDivElement).scrollLeft;
+    if (headerScrollRef.current) headerScrollRef.current.scrollLeft = scrollLeft;
+    // Sync channel column vertical scroll
+    if (channelColRef.current) {
+      channelColRef.current.scrollTop = (e.target as HTMLDivElement).scrollTop;
+    }
+  }, []);
+
+  const handleChannelScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    if (bodyScrollRef.current) {
+      bodyScrollRef.current.scrollTop = (e.target as HTMLDivElement).scrollTop;
+    }
+  }, []);
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden bg-black/40 select-none">
+
+      {/* ── TOP: time-axis header (horizontal scroll only) ──────────── */}
+      <div className="flex shrink-0" style={{ height: HEADER_H }}>
+        {/* Corner cell */}
+        <div
+          className="shrink-0 border-b border-r border-white/8 bg-black/60 
+            flex items-center justify-center"
+          style={{ width: CHANNEL_COL_W }}
+        >
+          <div className="flex items-center gap-1.5 text-white/30 text-xs">
+            <Clock size={11} />
+            <span>Schedule</span>
+          </div>
+        </div>
+
+        {/* Time axis — scrolls horizontally to match body */}
+        <div
+          ref={headerScrollRef}
+          className="flex-1 overflow-x-hidden overflow-y-hidden border-b border-white/8 relative"
+          style={{ scrollbarWidth: 'none' }}
+        >
+          <div className="relative" style={{ width: GRID_W, height: HEADER_H }}>
+            {timeSlots.map((slot, i) => (
+              <div
+                key={i}
+                className="absolute top-0 bottom-0 flex items-center"
+                style={{ left: slot.x }}
+              >
+                {/* Vertical tick line */}
+                <div className={`absolute top-0 bottom-0 w-px ${slot.isHour ? 'bg-white/10' : 'bg-white/5'}`} />
+                <span className={`pl-1.5 text-[11px] font-mono relative z-10 ${
+                  slot.isHour ? 'text-white/50' : 'text-white/25'
+                }`}>
+                  {slot.label}
+                </span>
+              </div>
+            ))}
+
+            {/* NOW indicator in header */}
+            <div
+              className="absolute top-0 bottom-0 z-20 pointer-events-none"
+              style={{ left: nowX }}
+            >
+              <div className="w-px h-full bg-red-500" />
+              <div className="absolute top-1 -translate-x-1/2 
+                bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                NOW
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── BODY: channels (left) + programs (right) ────────────────── */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* Channel column — sticky left, scrolls vertically */}
+        <div
+          ref={channelColRef}
+          className="shrink-0 overflow-y-hidden border-r border-white/8 bg-black/40"
+          style={{ width: CHANNEL_COL_W, scrollbarWidth: 'none' }}
+          onScroll={handleChannelScroll}
+        >
+          {channels.map(ch => (
+            <button
+              key={ch.stream_id}
+              onClick={() => onChannelClick(ch)}
+              className="flex items-center gap-2.5 w-full px-3 border-b border-white/5 
+                hover:bg-white/5 active:bg-white/10 transition-colors text-left group"
+              style={{ height: ROW_H }}
+            >
+              {ch.stream_icon ? (
+                <img
+                  src={ch.stream_icon}
+                  className="w-8 h-8 rounded object-contain shrink-0"
+                  onError={e => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
+                  alt=""
+                />
+              ) : (
+                <div className="w-8 h-8 rounded bg-white/10 flex items-center justify-center shrink-0">
+                  <span className="text-white/20 text-xs font-bold">
+                    {ch.name?.charAt(0)?.toUpperCase()}
+                  </span>
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-white/80 text-xs font-medium truncate group-hover:text-white">
+                  {ch.name}
+                </p>
+                {/* Now playing mini-info */}
+                {(() => {
+                  const now = getNowPlaying(ch.epg_channel_id ?? String(ch.stream_id));
+                  return now ? (
+                    <p className="text-white/30 text-[10px] truncate">{now.title}</p>
+                  ) : null;
+                })()}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Program grid — scrolls both axes */}
+        <div
+          ref={bodyScrollRef}
+          className="flex-1 overflow-auto"
+          onScroll={handleBodyScroll}
+        >
+          <div className="relative" style={{ width: GRID_W, minHeight: channels.length * ROW_H }}>
+
+            {/* NOW indicator (full height) */}
+            <div
+              className="absolute top-0 bottom-0 w-px bg-red-500/40 z-10 pointer-events-none"
+              style={{ left: nowX }}
+            />
+
+            {channels.map((ch, rowIdx) => {
+              const programs = epgData.get(ch.epg_channel_id ?? ch.name) ?? [];
+              const top = rowIdx * ROW_H;
+
+              return (
+                <div
+                  key={ch.stream_id}
+                  className="absolute left-0 right-0 border-b border-white/5"
+                  style={{ top, height: ROW_H, width: GRID_W }}
+                >
+                  {programs.map((prog, pi) => {
+                    const startDate = new Date(prog.startTime);
+                    const endDate = new Date(prog.stopTime);
+                    const x = Math.max(0, getXForTime(startDate, dayStart));
+                    const endX = getXForTime(endDate, dayStart);
+                    const w = Math.max(MIN_PGM_W, endX - x - 2);
+
+                    const isLive = currentTime >= startDate && currentTime < endDate;
+                    const isPast = currentTime >= endDate;
+
+                    // Progress within current program
+                    const progress = isLive
+                      ? (currentTime.getTime() - startDate.getTime()) /
+                        (endDate.getTime() - startDate.getTime())
+                      : 0;
+
+                    return (
+                      <button
+                        key={pi}
+                        onClick={() => onProgramClick?.(prog, ch)}
+                        className={`
+                          absolute top-1 rounded-lg px-2 text-left overflow-hidden
+                          border transition-all duration-150 group/prog
+                          ${isLive
+                            ? 'border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20'
+                            : isPast
+                            ? 'border-white/5 bg-white/3 hover:bg-white/6 opacity-50'
+                            : 'border-white/8 bg-white/5 hover:bg-white/10 hover:border-white/15'
+                          }
+                        `}
+                        style={{
+                          left: x + 1,
+                          width: w,
+                          bottom: 4,
+                        }}
+                      >
+                        {/* Live progress fill */}
+                        {isLive && (
+                          <div
+                            className="absolute inset-y-0 left-0 bg-cyan-500/10 rounded-lg"
+                            style={{ width: `${progress * 100}%` }}
+                          />
+                        )}
+
+                        {/* Program title */}
+                        <p className={`
+                          relative z-10 text-[11px] font-medium truncate leading-tight mt-1
+                          ${isLive ? 'text-cyan-100' : isPast ? 'text-white/30' : 'text-white/70 group-hover/prog:text-white'}
+                        `}>
+                          {prog.title}
+                        </p>
+
+                        {/* Time if there's room */}
+                        {w > 80 && (
+                          <p className={`
+                            relative z-10 text-[9px] truncate
+                            ${isLive ? 'text-cyan-400/70' : 'text-white/25'}
+                          `}>
+                            {startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: timeFormat === '12h' })}
+                          </p>
+                        )}
+                      </button>
+                    );
+                  })}
+
+                  {/* Empty row placeholder */}
+                  {programs.length === 0 && (
+                    <div className="flex items-center px-3 h-full">
+                      <span className="text-white/10 text-[11px] italic">No guide data</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Jump to NOW button ─────────────────────────────────────── */}
+      <div className="absolute bottom-4 right-4">
+        <button
+          onClick={() => {
+            const targetX = Math.max(0, nowX - 100);
+            bodyScrollRef.current?.scrollTo({ left: targetX, behavior: 'smooth' });
+            if (headerScrollRef.current) {
+              headerScrollRef.current.scrollTo({ left: targetX, behavior: 'smooth' });
+            }
+          }}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/20 border border-red-500/30
+            text-red-400 text-xs font-semibold rounded-full hover:bg-red-500/30 transition-colors"
+        >
+          <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+          Jump to Now
+        </button>
+      </div>
+    </div>
+  );
+};
+```
+
+Wire into LiveTV.tsx:
+
+```typescript
+// pages/LiveTV.tsx — Add EPG grid view toggle
+
+type LiveTvView = 'split' | 'epg';
+
+// Add view toggle buttons in the header:
+// <button onClick={() => setView('split')}>Channel List</button>
+// <button onClick={() => setView('epg')}>EPG Guide</button>
+
+// Render conditionally:
+{view === 'epg' ? (
+  <EpgGrid
+    channels={xtream.channels}
+    epgData={epg.epgData}
+    getNowPlaying={epg.getNowPlaying}
+    onChannelClick={channel => {
+      handleChannelSelect(channel);
+      setView('split'); // Switch back to player view on channel click
+    }}
+    onProgramClick={(program, channel) => {
+      // Show program info popup
+      setSelectedProgram({ program, channel });
+    }}
+    timeFormat={settings.epgTimeFormat}
+  />
+) : (
+  <SplitView ... />
+)}
+```
+
+---
+
+### FEATURE 2 — VOD Seek Thumbnail Scrubbing
+
+```typescript
+// hooks/useSeekPreview.ts — Complete seek thumbnail preview system
+
+import { useRef, useCallback, useState } from 'react';
+
+export interface SeekPreview {
+  visible: boolean;
+  x: number;            // pixel position on seek bar
+  time: number;         // seconds
+  dataUrl: string;      // canvas capture
+}
+
+export const useSeekPreview = (videoRef: React.RefObject<HTMLVideoElement>) => {
+  const [preview, setPreview] = useState<SeekPreview>({
+    visible: false, x: 0, time: 0, dataUrl: ''
+  });
+
+  const scratchRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastTimeRef = useRef(-999);
+  const captureQueueRef = useRef(false);
+
+  // Initialize scratch video (hidden video for seek captures)
+  const init = useCallback((url: string) => {
+    // Clean up previous
+    if (scratchRef.current) {
+      scratchRef.current.src = '';
+      scratchRef.current.load();
+    }
+
+    const video = document.createElement('video');
+    video.src = url;
+    video.muted = true;
+    video.preload = 'metadata';
+    video.crossOrigin = 'anonymous';
+    video.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
+    document.body.appendChild(video);
+    scratchRef.current = video;
+
+    if (!canvasRef.current) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 192;
+      canvas.height = 108; // 16:9 thumbnail
+      canvasRef.current = canvas;
+    }
+  }, []);
+
+  const destroy = useCallback(() => {
+    if (scratchRef.current) {
+      document.body.removeChild(scratchRef.current);
+      scratchRef.current = null;
+    }
+    lastTimeRef.current = -999;
+  }, []);
+
+  const captureAt = useCallback((
+    seekFraction: number,
+    duration: number,
+    barX: number
+  ) => {
+    const targetTime = seekFraction * duration;
+
+    // Debounce: only capture if time changed by > 1 second
+    if (Math.abs(targetTime - lastTimeRef.current) < 1.0) {
+      // Still update X position even if not re-capturing
+      setPreview(prev => ({ ...prev, x: barX, visible: true, time: targetTime }));
+      return;
+    }
+
+    if (captureQueueRef.current) return; // Previous capture in progress
+    captureQueueRef.current = true;
+    lastTimeRef.current = targetTime;
+
+    const scratch = scratchRef.current;
+    const canvas = canvasRef.current;
+    if (!scratch || !canvas) { captureQueueRef.current = false; return; }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { captureQueueRef.current = false; return; }
+
+    const onSeeked = () => {
+      try {
+        ctx.drawImage(scratch, 0, 0, 192, 108);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
+        setPreview({ visible: true, x: barX, time: targetTime, dataUrl });
+      } catch { /* CORS or decode error — ignore */ }
+      captureQueueRef.current = false;
+      scratch.removeEventListener('seeked', onSeeked);
+      scratch.removeEventListener('error', onError);
+    };
+
+    const onError = () => {
+      captureQueueRef.current = false;
+      scratch.removeEventListener('seeked', onSeeked);
+      scratch.removeEventListener('error', onError);
+    };
+
+    scratch.addEventListener('seeked', onSeeked);
+    scratch.addEventListener('error', onError);
+    scratch.currentTime = targetTime;
+  }, []);
+
+  const hidePreview = useCallback(() => {
+    setPreview(prev => ({ ...prev, visible: false }));
+  }, []);
+
+  return { preview, init, destroy, captureAt, hidePreview };
+};
+```
+
+Seek bar with thumbnail preview in the OSD:
+
+```typescript
+// VideoPlayer.tsx — Enhanced seek bar JSX
+
+const handleSeekBarMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  if (playerState.streamType !== 'vod' || playerState.duration <= 0) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  seekPreview.captureAt(fraction, playerState.duration, e.clientX - rect.left);
+}, [playerState.duration, playerState.streamType, seekPreview]);
+
+// In the seek bar JSX:
+<div className="relative mb-3">
+  {/* Seek thumbnail preview */}
+  {seekPreview.preview.visible && seekPreview.preview.dataUrl && (
+    <div
+      className="absolute bottom-6 pointer-events-none z-20"
+      style={{
+        left: seekPreview.preview.x,
+        transform: 'translateX(-50%)',
+      }}
+    >
+      <div className="flex flex-col items-center gap-1">
+        <img
+          src={seekPreview.preview.dataUrl}
+          className="w-48 h-27 rounded-lg border border-white/20 shadow-2xl object-cover"
+          style={{ width: 192, height: 108 }}
+          alt="preview"
+        />
+        <span className="text-white/80 text-xs font-mono bg-black/80 px-2 py-0.5 rounded">
+          {formatTime(seekPreview.preview.time)}
+        </span>
+      </div>
+    </div>
+  )}
+
+  {/* Seek bar track */}
+  <div
+    className="relative h-1 bg-white/15 rounded-full cursor-pointer
+      hover:h-2 transition-all duration-100 group"
+    onMouseMove={handleSeekBarMouseMove}
+    onMouseLeave={seekPreview.hidePreview}
+    onClick={handleSeekClick}
+  >
+    {/* Buffered */}
+    <div
+      className="absolute inset-y-0 left-0 bg-white/25 rounded-full pointer-events-none"
+      style={{ width: `${bufferedPercent}%` }}
+    />
+    {/* Played */}
+    <div
+      className="absolute inset-y-0 left-0 bg-cyan-400 rounded-full pointer-events-none"
+      style={{ width: `${(playerState.position / playerState.duration) * 100}%` }}
+    />
+    {/* Scrubber thumb */}
+    <div
+      className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2
+        w-3.5 h-3.5 bg-cyan-400 rounded-full shadow-lg
+        opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+      style={{ left: `${(playerState.position / playerState.duration) * 100}%` }}
+    />
+  </div>
+</div>
+```
+
+---
+
+### FEATURE 3 — Auto-Play Next Episode with Countdown
+
+```typescript
+// hooks/useAutoPlayNext.ts
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+
+interface AutoPlayNextState {
+  visible: boolean;
+  countdown: number;
+  nextTitle: string;
+  nextEpisodeInfo: string;
+}
+
+export const useAutoPlayNext = (
+  position: number,
+  duration: number,
+  isVod: boolean,
+  enabled: boolean,
+  countdownSeconds: number,
+  onPlayNext: (() => void) | null
+) => {
+  const [state, setState] = useState<AutoPlayNextState>({
+    visible: false, countdown: countdownSeconds, nextTitle: '', nextEpisodeInfo: ''
+  });
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasTriggeredRef = useRef(false);
+  const countdownRef = useRef(countdownSeconds);
+
+  const cancel = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setState(prev => ({ ...prev, visible: false }));
+    hasTriggeredRef.current = true; // prevent re-trigger for this episode
+  }, []);
+
+  const reset = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    hasTriggeredRef.current = false;
+    countdownRef.current = countdownSeconds;
+    setState({ visible: false, countdown: countdownSeconds, nextTitle: '', nextEpisodeInfo: '' });
+  }, [countdownSeconds]);
+
+  const setNextEpisodeInfo = useCallback((title: string, info: string) => {
+    setState(prev => ({ ...prev, nextTitle: title, nextEpisodeInfo: info }));
+  }, []);
+
+  // Show countdown when within (countdownSeconds + 5) of end
+  const remainingSeconds = duration > 0 ? duration - position : Infinity;
+  const shouldShow = isVod && enabled && !!onPlayNext && remainingSeconds <= (countdownSeconds + 5) && remainingSeconds > 0;
+
+  useEffect(() => {
+    if (!shouldShow || hasTriggeredRef.current) return;
+
+    setState(prev => ({ ...prev, visible: true, countdown: countdownSeconds }));
+    countdownRef.current = countdownSeconds;
+
+    timerRef.current = setInterval(() => {
+      countdownRef.current -= 1;
+      setState(prev => ({ ...prev, countdown: countdownRef.current }));
+
+      if (countdownRef.current <= 0) {
+        clearInterval(timerRef.current!);
+        hasTriggeredRef.current = true;
+        setState(prev => ({ ...prev, visible: false }));
+        onPlayNext?.();
+      }
+    }, 1000);
+
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [shouldShow]);
+
+  return { state, cancel, reset, setNextEpisodeInfo };
+};
+```
+
+Auto-play next overlay in VideoPlayer.tsx:
+
+```typescript
+// VideoPlayer.tsx — Auto-play next episode overlay
+
+{autoPlayNext.state.visible && (
+  <div className="absolute bottom-24 right-5 z-30
+    w-72 bg-black/92 border border-white/15 rounded-2xl p-4
+    backdrop-blur-md shadow-2xl animate-in slide-in-from-right-4 duration-300">
+
+    {/* Header */}
+    <p className="text-white/50 text-[11px] font-semibold uppercase tracking-wider mb-2">
+      Up Next
+    </p>
+
+    {/* Episode info */}
+    <p className="text-white text-sm font-semibold leading-tight mb-0.5">
+      {autoPlayNext.state.nextTitle}
+    </p>
+    <p className="text-white/50 text-xs mb-4">
+      {autoPlayNext.state.nextEpisodeInfo}
+    </p>
+
+    {/* Countdown ring + actions */}
+    <div className="flex items-center gap-3">
+      {/* SVG countdown ring */}
+      <div className="relative w-11 h-11 shrink-0">
+        <svg viewBox="0 0 44 44" className="w-11 h-11 -rotate-90">
+          <circle cx="22" cy="22" r="18"
+            fill="none" stroke="white" strokeOpacity="0.15" strokeWidth="3"
+          />
+          <circle cx="22" cy="22" r="18"
+            fill="none" stroke="#00FFFF" strokeWidth="3"
+            strokeDasharray={`${(autoPlayNext.state.countdown / (settings.vodAutoPlayCountdown || 10)) * 113} 113`}
+            strokeLinecap="round"
+            style={{ transition: 'stroke-dasharray 0.9s linear' }}
+          />
+        </svg>
+        <span className="absolute inset-0 flex items-center justify-center
+          text-white text-sm font-bold">
+          {autoPlayNext.state.countdown}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-1.5 flex-1">
+        <button
+          onClick={() => { autoPlayNext.cancel(); onPlayNext?.(); }}
+          className="w-full py-1.5 bg-cyan-500 text-black text-xs font-bold rounded-xl
+            hover:bg-cyan-400 transition-colors"
+        >
+          Play Now
+        </button>
+        <button
+          onClick={autoPlayNext.cancel}
+          className="w-full py-1.5 border border-white/15 text-white/60 text-xs rounded-xl
+            hover:bg-white/5 transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+```
+
+Wire in SeriesDetail.tsx:
+
+```typescript
+// pages/SeriesDetail.tsx — Set up auto-play next
+
+const handleEpisodeEnd = useCallback(() => {
+  // Find next episode
+  const currentIdx = episodes.findIndex(e => e.id === currentEpisode?.id);
+  if (currentIdx >= 0 && currentIdx < episodes.length - 1) {
+    const next = episodes[currentIdx + 1];
+    autoPlayNext.setNextEpisodeInfo(
+      next.title || `Episode ${next.episode_num}`,
+      `S${next.season} · E${next.episode_num}`
+    );
+    setNextEpisodeToPlay(next);
+  } else {
+    // Last episode of season — check next season
+    // ...
+  }
+}, [episodes, currentEpisode, autoPlayNext]);
+```
+
+---
+
+### FEATURE 4 — Toast Notification System
+
+```typescript
+// components/ToastProvider.tsx — Complete toast system
+
+import React, { createContext, useContext, useState, useCallback, useRef, useId } from 'react';
+import { CheckCircle2, XCircle, AlertTriangle, Info, X } from 'lucide-react';
+
+type ToastType = 'success' | 'error' | 'warning' | 'info';
+type ToastPosition = 'top-right' | 'top-center' | 'bottom-right';
+
+interface Toast {
+  id: string;
+  type: ToastType;
+  title?: string;
+  message: string;
+  duration: number;
+  action?: { label: string; onClick: () => void };
+}
+
+interface ToastContextValue {
+  toast: (message: string, type?: ToastType, options?: Partial<Omit<Toast, 'id' | 'type' | 'message'>>) => string;
+  success: (message: string, title?: string) => string;
+  error: (message: string, title?: string) => string;
+  warning: (message: string, title?: string) => string;
+  info: (message: string, title?: string) => string;
+  dismiss: (id: string) => void;
+  dismissAll: () => void;
+}
+
+const ToastContext = createContext<ToastContextValue | null>(null);
+
+export const useToast = (): ToastContextValue => {
+  const ctx = useContext(ToastContext);
+  if (!ctx) throw new Error('useToast must be used within ToastProvider');
+  return ctx;
+};
+
+const ICONS: Record<ToastType, React.ReactNode> = {
+  success: <CheckCircle2 size={16} />,
+  error:   <XCircle size={16} />,
+  warning: <AlertTriangle size={16} />,
+  info:    <Info size={16} />,
+};
+
+const STYLES: Record<ToastType, string> = {
+  success: 'border-green-500/40 bg-green-500/10 text-green-400',
+  error:   'border-red-500/40 bg-red-500/10 text-red-400',
+  warning: 'border-yellow-500/40 bg-yellow-500/10 text-yellow-400',
+  info:    'border-cyan-500/40 bg-cyan-500/10 text-cyan-400',
+};
+
+export const ToastProvider: React.FC<{
+  children: React.ReactNode;
+  position?: ToastPosition;
+  maxToasts?: number;
+}> = ({ children, position = 'top-right', maxToasts = 5 }) => {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const counter = useRef(0);
+  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const dismiss = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+    const timer = timers.current.get(id);
+    if (timer) { clearTimeout(timer); timers.current.delete(id); }
+  }, []);
+
+  const dismissAll = useCallback(() => {
+    timers.current.forEach(t => clearTimeout(t));
+    timers.current.clear();
+    setToasts([]);
+  }, []);
+
+  const toast = useCallback((
+    message: string,
+    type: ToastType = 'info',
+    options: Partial<Omit<Toast, 'id' | 'type' | 'message'>> = {}
+  ): string => {
+    const id = `toast_${++counter.current}`;
+    const duration = options.duration ?? (type === 'error' ? 6000 : 4000);
+
+    const newToast: Toast = { id, type, message, duration, ...options };
+
+    setToasts(prev => {
+      const next = [...prev, newToast];
+      return next.slice(-maxToasts); // keep only newest maxToasts
+    });
+
+    if (duration > 0) {
+      const timer = setTimeout(() => dismiss(id), duration);
+      timers.current.set(id, timer);
+    }
+
+    return id;
+  }, [dismiss, maxToasts]);
+
+  const success = useCallback((m: string, title?: string) => toast(m, 'success', { title }), [toast]);
+  const error   = useCallback((m: string, title?: string) => toast(m, 'error',   { title, duration: 7000 }), [toast]);
+  const warning = useCallback((m: string, title?: string) => toast(m, 'warning', { title }), [toast]);
+  const info    = useCallback((m: string, title?: string) => toast(m, 'info',    { title }), [toast]);
+
+  const positionClass = {
+    'top-right':    'top-4 right-4',
+    'top-center':   'top-4 left-1/2 -translate-x-1/2',
+    'bottom-right': 'bottom-20 right-4',
+  }[position];
+
+  return (
+    <ToastContext.Provider value={{ toast, success, error, warning, info, dismiss, dismissAll }}>
+      {children}
+      <div className={`fixed z-[9999] flex flex-col gap-2 pointer-events-none ${positionClass}`}
+           style={{ minWidth: 280, maxWidth: 380 }}>
+        {toasts.map(t => (
+          <div
+            key={t.id}
+            className={`
+              flex items-start gap-3 px-4 py-3 rounded-xl border
+              backdrop-blur-md shadow-2xl pointer-events-auto
+              animate-in slide-in-from-right-4 fade-in duration-200
+              ${STYLES[t.type]}
+            `}
+          >
+            <span className="shrink-0 mt-0.5">{ICONS[t.type]}</span>
+            <div className="flex-1 min-w-0">
+              {t.title && (
+                <p className="text-white text-sm font-semibold mb-0.5">{t.title}</p>
+              )}
+              <p className="text-white/80 text-sm leading-snug">{t.message}</p>
+              {t.action && (
+                <button
+                  onClick={() => { t.action!.onClick(); dismiss(t.id); }}
+                  className="mt-2 text-xs font-semibold underline underline-offset-2 hover:opacity-80"
+                >
+                  {t.action.label}
+                </button>
+              )}
+            </div>
+            <button
+              onClick={() => dismiss(t.id)}
+              className="shrink-0 opacity-50 hover:opacity-100 transition-opacity mt-0.5"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+};
+```
+
+Wrap in `src/main.tsx`:
+
+```typescript
+// src/main.tsx
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <ErrorBoundary>
+      <ToastProvider position="top-right">
+        <App />
+      </ToastProvider>
+    </ErrorBoundary>
+  </React.StrictMode>
+);
+```
+
+Use throughout the app:
+
+```typescript
+// Any component:
+const { success, error, info } = useToast();
+
+// On channel switch:
+success(`Now watching ${channel.name}`);
+
+// On stream error:
+error('Stream unavailable. Trying to reconnect...', 'Playback Error');
+
+// On settings save:
+info('Settings saved');
+
+// On EPG reload:
+success('EPG guide updated!');
+
+// On profile added:
+success(`Connected to ${profile.name}`, 'Profile Added');
+```
+
+---
+
+### FEATURE 5 — Comprehensive Keyboard Shortcuts System
+
+```typescript
+// hooks/useKeyboardShortcuts.ts — Complete keyboard control system
+
+import { useEffect, useCallback, useRef } from 'react';
+
+export interface ShortcutAction {
+  key: string;           // e.g. 'Space', 'KeyF', 'ArrowLeft'
+  ctrl?: boolean;
+  shift?: boolean;
+  alt?: boolean;
+  description: string;
+  category: 'playback' | 'navigation' | 'volume' | 'view' | 'app';
+  handler: () => void;
+}
+
+interface ShortcutHandlers {
+  // Playback
+  playPause: () => void;
+  stop: () => void;
+  seekBack10: () => void;
+  seekForward10: () => void;
+  seekBack30: () => void;
+  seekForward30: () => void;
+  seekBack60: () => void;
+  seekForward60: () => void;
+  // Volume
+  volumeUp: () => void;
+  volumeDown: () => void;
+  mute: () => void;
+  volumeMax: () => void;
+  // Navigation
+  nextChannel: () => void;
+  prevChannel: () => void;
+  onDigit: (d: string) => void;
+  // View
+  fullscreen: () => void;
+  pip: () => void;
+  toggleEpg: () => void;
+  toggleSidebar: () => void;
+  // App
+  openSearch: () => void;
+  goHome: () => void;
+  goLiveTV: () => void;
+  goMovies: () => void;
+  escape: () => void;
+}
+
+// Channel number buffering
+let channelBuffer = '';
+let channelBufferTimer: ReturnType<typeof setTimeout> | null = null;
+
+const clearChannelBuffer = () => {
+  channelBuffer = '';
+  if (channelBufferTimer) clearTimeout(channelBufferTimer);
+};
+
+export const useKeyboardShortcuts = (
+  handlers: ShortcutHandlers,
+  enabled = true,
+  customMap?: Partial<Record<string, keyof ShortcutHandlers>>
+) => {
+  const handlersRef = useRef(handlers);
+  useEffect(() => { handlersRef.current = handlers; });
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (!enabled) return;
+
+    // Don't intercept if focused on input elements
+    const target = e.target as HTMLElement;
+    if (
+      target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.tagName === 'SELECT' ||
+      target.isContentEditable
+    ) return;
+
+    const h = handlersRef.current;
+    const ctrl = e.ctrlKey || e.metaKey;
+    const shift = e.shiftKey;
+
+    // ── Channel number buffer ──────────────────────────────────────────
+    if (/^Digit[0-9]$/.test(e.code) && !ctrl && !shift) {
+      const digit = e.code.replace('Digit', '');
+      channelBuffer += digit;
+      h.onDigit(channelBuffer);
+
+      if (channelBufferTimer) clearTimeout(channelBufferTimer);
+      channelBufferTimer = setTimeout(clearChannelBuffer, 1500);
+      e.preventDefault();
+      return;
+    }
+
+    // ── Playback ──────────────────────────────────────────────────────
+    switch (e.code) {
+      case 'Space':
+      case 'KeyK':
+        h.playPause();
+        e.preventDefault();
+        return;
+
+      case 'KeyS':
+        if (!ctrl) { h.stop(); e.preventDefault(); return; }
+        break;
+
+      // Seek with modifiers: plain = 10s, shift = 30s, ctrl = 60s
+      case 'ArrowRight':
+        if (!ctrl && !shift) h.seekForward10();
+        else if (shift) h.seekForward30();
+        else if (ctrl) h.seekForward60();
+        e.preventDefault();
+        return;
+
+      case 'ArrowLeft':
+        if (!ctrl && !shift) h.seekBack10();
+        else if (shift) h.seekBack30();
+        else if (ctrl) h.seekBack60();
+        e.preventDefault();
+        return;
+
+      // ── Volume ──────────────────────────────────────────────────────
+      case 'ArrowUp':
+        h.volumeUp();
+        e.preventDefault();
+        return;
+
+      case 'ArrowDown':
+        h.volumeDown();
+        e.preventDefault();
+        return;
+
+      case 'KeyM':
+        h.mute();
+        e.preventDefault();
+        return;
+
+      // ── Navigation ──────────────────────────────────────────────────
+      case 'PageUp':
+        h.prevChannel();
+        e.preventDefault();
+        return;
+
+      case 'PageDown':
+        h.nextChannel();
+        e.preventDefault();
+        return;
+
+      // ── View ────────────────────────────────────────────────────────
+      case 'KeyF':
+        h.fullscreen();
+        e.preventDefault();
+        return;
+
+      case 'KeyP':
+        if (!ctrl) { h.pip(); e.preventDefault(); return; }
+        break;
+
+      case 'KeyG':
+        h.toggleEpg();
+        e.preventDefault();
+        return;
+
+      case 'KeyB':
+        h.toggleSidebar();
+        e.preventDefault();
+        return;
+
+      // ── App ─────────────────────────────────────────────────────────
+      case 'Slash':
+      case 'KeyF':
+        if (ctrl) { h.openSearch(); e.preventDefault(); return; }
+        break;
+
+      case 'Escape':
+        h.escape();
+        e.preventDefault();
+        return;
+
+      case 'Digit1':
+        if (ctrl) { h.goHome(); e.preventDefault(); return; }
+        break;
+      case 'Digit2':
+        if (ctrl) { h.goLiveTV(); e.preventDefault(); return; }
+        break;
+      case 'Digit3':
+        if (ctrl) { h.goMovies(); e.preventDefault(); return; }
+        break;
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
+  }, [handleKeyDown]);
+
+  // Return shortcut reference list for the Settings/keyboard help screen
+  return {
+    shortcuts: [
+      { key: 'Space / K', description: 'Play / Pause', category: 'playback' },
+      { key: '← / →', description: 'Seek ±10s', category: 'playback' },
+      { key: 'Shift + ← / →', description: 'Seek ±30s', category: 'playback' },
+      { key: 'Ctrl + ← / →', description: 'Seek ±60s', category: 'playback' },
+      { key: '↑ / ↓', description: 'Volume up / down', category: 'volume' },
+      { key: 'M', description: 'Mute toggle', category: 'volume' },
+      { key: 'Page Up / Down', description: 'Prev / Next channel', category: 'navigation' },
+      { key: '0–9', description: 'Channel number (1.5s timeout)', category: 'navigation' },
+      { key: 'F', description: 'Toggle fullscreen', category: 'view' },
+      { key: 'P', description: 'Toggle Picture-in-Picture', category: 'view' },
+      { key: 'G', description: 'Toggle EPG Guide', category: 'view' },
+      { key: 'B', description: 'Toggle sidebar', category: 'view' },
+      { key: 'Ctrl + F', description: 'Search', category: 'app' },
+      { key: 'Ctrl + 1/2/3', description: 'Home / Live TV / Movies', category: 'app' },
+      { key: 'Esc', description: 'Exit fullscreen / Close dialogs', category: 'app' },
+    ] as const,
+  };
+};
+```
+
+Wire in App.tsx:
+
+```typescript
+// App.tsx — Wire keyboard shortcuts
+
+const shortcuts = useKeyboardShortcuts({
+  playPause: () => playerState.isPlaying ? pause() : play(),
+  stop: stopPlayer,
+  seekBack10: () => seek(-10),
+  seekForward10: () => seek(10),
+  seekBack30: () => seek(-30),
+  seekForward30: () => seek(30),
+  seekBack60: () => seek(-60),
+  seekForward60: () => seek(60),
+  volumeUp: () => updateSettings({ volume: Math.min(1, (settings.volume ?? 1) + 0.05) }),
+  volumeDown: () => updateSettings({ volume: Math.max(0, (settings.volume ?? 1) - 0.05) }),
+  mute: toggleMute,
+  volumeMax: () => updateSettings({ volume: 1 }),
+  nextChannel: () => navigateChannel(1),
+  prevChannel: () => navigateChannel(-1),
+  onDigit: handleChannelNumberInput,
+  fullscreen: toggleFullscreen,
+  pip: togglePip,
+  toggleEpg: () => setLiveTvView(v => v === 'epg' ? 'split' : 'epg'),
+  toggleSidebar: () => setSidebarCollapsed(v => !v),
+  openSearch: () => setCurrentPage('search'),
+  goHome: () => setCurrentPage('home'),
+  goLiveTV: () => setCurrentPage('live'),
+  goMovies: () => setCurrentPage('movies'),
+  escape: handleEscape,
+}, true); // enabled = true
+```
+
+Add keyboard shortcut reference page in Settings:
+
+```typescript
+// pages/Settings/KeyboardTab.tsx
+
+export const KeyboardTab: React.FC<{ shortcuts: readonly ShortcutRef[] }> = ({ shortcuts }) => {
+  const categories = ['playback', 'volume', 'navigation', 'view', 'app'] as const;
+
+  return (
+    <div className="space-y-6">
+      <TabHeader title="Keyboard Shortcuts" description="Default keyboard controls for DYLANDOS IPTV ULTIMATE" />
+
+      {categories.map(cat => (
+        <SettingsSection key={cat} title={cat.charAt(0).toUpperCase() + cat.slice(1)}>
+          <div className="divide-y divide-white/5">
+            {shortcuts.filter(s => s.category === cat).map((s, i) => (
+              <div key={i} className="flex items-center justify-between px-4 py-2.5 bg-white/3">
+                <span className="text-white/70 text-sm">{s.description}</span>
+                <kbd className="px-2 py-1 bg-white/10 border border-white/15 
+                  rounded text-white/60 text-xs font-mono">
+                  {s.key}
+                </kbd>
+              </div>
+            ))}
+          </div>
+        </SettingsSection>
+      ))}
+    </div>
+  );
+};
+```
+
+---
+
+### FEATURE 6 — Channel Number Jump OSD
+
+```typescript
+// hooks/useChannelNumberJump.ts
+
+import { useState, useRef, useCallback } from 'react';
+import { XtreamChannel } from '../types/xtream';
+
+export const useChannelNumberJump = (
+  channels: XtreamChannel[],
+  onJump: (channel: XtreamChannel) => void
+) => {
+  const [buffer, setBuffer] = useState('');
+  const [isActive, setIsActive] = useState(false);
+  const [matchedChannel, setMatchedChannel] = useState<XtreamChannel | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const commit = useCallback((buf: string) => {
+    const num = parseInt(buf, 10);
+    const ch = channels.find(c => c.num === num || Number(c.num) === num);
+    if (ch) onJump(ch);
+    setBuffer('');
+    setIsActive(false);
+    setMatchedChannel(null);
+  }, [channels, onJump]);
+
+  const handleDigit = useCallback((digit: string) => {
+    const newBuf = buffer + digit;
+    setBuffer(newBuf);
+    setIsActive(true);
+
+    // Preview matched channel
+    const num = parseInt(newBuf, 10);
+    const ch = channels.find(c => Number(c.num) === num);
+    setMatchedChannel(ch ?? null);
+
+    if (timerRef.current) clearTimeout(timerRef.current);
+
+    // Auto-commit at 4 digits
+    if (newBuf.length >= 4) {
+      timerRef.current = setTimeout(() => commit(newBuf), 200);
+      return;
+    }
+
+    // Auto-commit after 1.5s pause
+    timerRef.current = setTimeout(() => commit(newBuf), 1500);
+  }, [buffer, channels, commit]);
+
+  const cancel = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setBuffer('');
+    setIsActive(false);
+    setMatchedChannel(null);
+  }, []);
+
+  return { buffer, isActive, matchedChannel, handleDigit, cancel };
+};
+```
+
+Channel number OSD overlay (render in LiveTV.tsx):
+
+```typescript
+// pages/LiveTV.tsx — Channel jump OSD
+
+{channelJump.isActive && (
+  <div className="fixed inset-0 pointer-events-none z-50 flex items-center justify-center">
+    <div className="flex flex-col items-center gap-3 
+      bg-black/90 border border-white/15 rounded-3xl
+      px-10 py-7 backdrop-blur-xl shadow-2xl">
+
+      {/* Number display */}
+      <div className="flex items-center gap-1">
+        {[0, 1, 2, 3].map(i => (
+          <div
+            key={i}
+            className={`
+              w-12 h-16 rounded-xl border flex items-center justify-center
+              text-4xl font-bold font-mono transition-all
+              ${i < channelJump.buffer.length
+                ? 'bg-cyan-500/15 border-cyan-500/40 text-white'
+                : 'bg-white/5 border-white/10 text-white/15'
+              }
+            `}
+          >
+            {channelJump.buffer[i] ?? (i === 0 ? '—' : '')}
+          </div>
+        ))}
+      </div>
+
+      {/* Matched channel preview */}
+      {channelJump.matchedChannel ? (
+        <div className="flex items-center gap-2">
+          {channelJump.matchedChannel.stream_icon && (
+            <img
+              src={channelJump.matchedChannel.stream_icon}
+              className="w-6 h-6 rounded object-contain"
+              alt=""
+            />
+          )}
+          <span className="text-white/80 text-sm">
+            {channelJump.matchedChannel.name}
+          </span>
+        </div>
+      ) : (
+        <span className="text-white/30 text-xs">
+          {channelJump.buffer.length > 0 ? 'No matching channel' : 'Enter channel number'}
+        </span>
+      )}
+    </div>
+  </div>
+)}
+```
+
+---
+
+### FEATURE 7 — Stream Health Indicator in Player
+
+```typescript
+// components/StreamHealthIndicator.tsx — Live quality signal in player corner
+
+import React from 'react';
+
+interface StreamHealth {
+  bufferSeconds: number;
+  droppedFrames: number;
+  isBuffering: boolean;
+  bandwidthKbps?: number;
+  quality: 'excellent' | 'good' | 'poor' | 'critical';
+}
+
+export const StreamHealthIndicator: React.FC<{
+  health: StreamHealth;
+  visible: boolean;
+}> = ({ health, visible }) => {
+  if (!visible) return null;
+
+  const colors = {
+    excellent: '#22c55e',
+    good:      '#00FFFF',
+    poor:      '#eab308',
+    critical:  '#ef4444',
+  };
+
+  const barCount = { excellent: 4, good: 3, poor: 2, critical: 1 }[health.quality];
+  const color = colors[health.quality];
+
+  return (
+    <div className="flex items-center gap-1.5 bg-black/50 rounded-lg px-2 py-1 backdrop-blur-sm">
+      {/* Signal bars */}
+      <div className="flex items-end gap-px h-3.5">
+        {[1, 2, 3, 4].map(level => (
+          <div
+            key={level}
+            className="w-1 rounded-sm transition-all duration-500"
+            style={{
+              height: `${level * 3 + 1}px`,
+              backgroundColor: level <= barCount ? color : 'rgba(255,255,255,0.15)',
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Buffer level */}
+      <span className="text-[10px] font-mono" style={{ color }}>
+        {health.bufferSeconds.toFixed(1)}s
+      </span>
+
+      {/* Bandwidth */}
+      {health.bandwidthKbps != null && health.bandwidthKbps > 0 && (
+        <span className="text-white/30 text-[10px] font-mono">
+          {health.bandwidthKbps >= 1000
+            ? `${(health.bandwidthKbps / 1000).toFixed(1)}M`
+            : `${health.bandwidthKbps}K`}
+        </span>
+      )}
+
+      {/* Buffering spinner */}
+      {health.isBuffering && (
+        <div
+          className="w-2.5 h-2.5 rounded-full border border-t-transparent animate-spin"
+          style={{ borderColor: `${color}40`, borderTopColor: 'transparent' }}
+        />
+      )}
+    </div>
+  );
+};
+
+// Hook to populate it:
+// hooks/useStreamHealth.ts
+export const useStreamHealth = (videoRef: React.RefObject<HTMLVideoElement>) => {
+  const [health, setHealth] = useState<StreamHealth>({
+    bufferSeconds: 0, droppedFrames: 0, isBuffering: false, quality: 'good'
+  });
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startMonitoring = useCallback(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(() => {
+      const v = videoRef.current;
+      if (!v) return;
+
+      let bufSecs = 0;
+      for (let i = 0; i < v.buffered.length; i++) {
+        if (v.buffered.start(i) <= v.currentTime && v.buffered.end(i) >= v.currentTime) {
+          bufSecs = v.buffered.end(i) - v.currentTime;
+          break;
+        }
+      }
+
+      const dropped = v.getVideoPlaybackQuality?.()?.droppedVideoFrames ?? 0;
+      const quality =
+        bufSecs < 1   ? 'critical' :
+        bufSecs < 3   ? 'poor' :
+        bufSecs < 8   ? 'good' :
+                        'excellent';
+
+      setHealth({
+        bufferSeconds: Math.round(bufSecs * 10) / 10,
+        droppedFrames: dropped,
+        isBuffering: v.readyState < HTMLMediaElement.HAVE_FUTURE_DATA,
+        quality,
+      });
+    }, 1000);
+  }, [videoRef]);
+
+  const stopMonitoring = useCallback(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+  }, []);
+
+  useEffect(() => () => stopMonitoring(), [stopMonitoring]);
+
+  return { health, startMonitoring, stopMonitoring };
+};
+```
+
+Place in VideoPlayer.tsx top-right corner when OSD is visible:
+
+```typescript
+// VideoPlayer.tsx — StreamHealthIndicator in top-right of player
+
+{/* Top-right status indicators */}
+<div className="absolute top-3 right-3 flex items-center gap-2 z-10">
+  <StreamHealthIndicator
+    health={streamHealth.health}
+    visible={settings.showStreamHealthOverlay && osd.isVisible}
+  />
+</div>
+```
+
+---
+
+### FEATURE 8 — TMDB Enrichment Completion
+
+```typescript
+// services/tmdb.ts — Complete implementation with disk cache
+
+import { getLargeData, setLargeData } from './storage';
+
+const TMDB_BASE = 'https://api.themoviedb.org/3';
+const IMG_BASE  = 'https://image.tmdb.org/t/p';
+const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+interface TMDBMovieDetail {
+  id: number;
+  title: string;
+  overview: string;
+  tagline: string;
+  poster_path: string | null;
+  backdrop_path: string | null;
+  release_date: string;
+  vote_average: number;
+  vote_count: number;
+  runtime: number;
+  genres: { id: number; name: string }[];
+  credits?: {
+    cast: { id: number; name: string; character: string; profile_path: string | null }[];
+    crew: { id: number; name: string; job: string }[];
+  };
+  videos?: {
+    results: { key: string; site: string; type: string; official: boolean }[];
+  };
+  similar?: { results: TMDBMovieDetail[] };
+}
+
+interface TMDBCache {
+  version: number;
+  entries: Record<number, { data: TMDBMovieDetail; cachedAt: number }>;
+}
+
+export class TMDBService {
+  private apiKey: string;
+  private language: string;
+  private memCache = new Map<number, TMDBMovieDetail>();
+  private cache: TMDBCache = { version: 1, entries: {} };
+  private cacheLoaded = false;
+  private pendingRequests = new Map<string, Promise<unknown>>();
+
+  constructor(apiKey: string, language = 'en-US') {
+    this.apiKey = apiKey;
+    this.language = language;
+  }
+
+  async init(): Promise<void> {
+    if (this.cacheLoaded) return;
+    try {
+      const saved = await getLargeData<TMDBCache>('tmdb-cache.json', { version: 1, entries: {} });
+      this.cache = saved;
+      // Warm memory cache from disk cache
+      const now = Date.now();
+      for (const [id, entry] of Object.entries(this.cache.entries)) {
+        if (now - entry.cachedAt < CACHE_TTL_MS) {
+          this.memCache.set(Number(id), entry.data);
+        }
+      }
+    } catch { /* Start fresh */ }
+    this.cacheLoaded = true;
+  }
+
+  private async fetch<T>(endpoint: string, params: Record<string, string> = {}): Promise<T> {
+    // Dedup concurrent identical requests
+    const cacheKey = `${endpoint}:${JSON.stringify(params)}`;
+    if (this.pendingRequests.has(cacheKey)) {
+      return this.pendingRequests.get(cacheKey) as Promise<T>;
+    }
+
+    const url = new URL(`${TMDB_BASE}${endpoint}`);
+    url.searchParams.set('api_key', this.apiKey);
+    url.searchParams.set('language', this.language);
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+
+    const request = fetch(url.toString(), { signal: AbortSignal.timeout(8000) })
+      .then(r => { if (!r.ok) throw new Error(`TMDB ${r.status}`); return r.json() as T; })
+      .finally(() => this.pendingRequests.delete(cacheKey));
+
+    this.pendingRequests.set(cacheKey, request);
+    return request;
+  }
+
+  // Clean IPTV title before TMDB search
+  private cleanTitle(name: string): { title: string; year: number | null } {
+    let title = name
+      .replace(/\b(4K|2160p|1080p|720p|480p|360p)\b/gi, '')
+      .replace(/\b(HDR10?|HLG|SDR|Dolby[\s.]+Vision)\b/gi, '')
+      .replace(/\b(BluRay|BDRip|WEBRip|WEB-DL|HDTV|DVDRip|CAM|TS)\b/gi, '')
+      .replace(/\b(x264|x265|H\.264|H\.265|HEVC|AVC|AV1|VP9)\b/gi, '')
+      .replace(/\b(AAC|AC3|DTS|MP3|FLAC|TrueHD|Atmos)\b/gi, '')
+      .replace(/\b(REMUX|PROPER|REPACK|EXTENDED|THEATRICAL|DIRECTORS?\.?CUT)\b/gi, '')
+      .replace(/[\[\](){}]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // Extract year if present
+    const yearMatch = title.match(/\b(19|20)\d{2}\b/);
+    const year = yearMatch ? parseInt(yearMatch[0]) : null;
+    title = title.replace(/\b(19|20)\d{2}\b/, '').trim();
+
+    return { title, year };
+  }
+
+  async enrichMovie(streamId: number, name: string): Promise<TMDBMovieDetail | null> {
+    // Check memory cache first
+    if (this.memCache.has(streamId)) return this.memCache.get(streamId)!;
+
+    // Check disk cache
+    const diskEntry = this.cache.entries[streamId];
+    if (diskEntry && Date.now() - diskEntry.cachedAt < CACHE_TTL_MS) {
+      this.memCache.set(streamId, diskEntry.data);
+      return diskEntry.data;
+    }
+
+    if (!this.apiKey) return null;
+
+    try {
+      const { title, year } = this.cleanTitle(name);
+      const params: Record<string, string> = { query: title };
+      if (year) params.year = String(year);
+
+      const searchRes = await this.fetch<{ results: { id: number }[] }>('/search/movie', params);
+      if (!searchRes.results.length) return null;
+
+      const detail = await this.fetch<TMDBMovieDetail>(
+        `/movie/${searchRes.results[0].id}`,
+        { append_to_response: 'credits,videos,similar' }
+      );
+
+      // Cache it
+      this.memCache.set(streamId, detail);
+      this.cache.entries[streamId] = { data: detail, cachedAt: Date.now() };
+
+      // Async persist to disk (don't await — non-blocking)
+      void setLargeData('tmdb-cache.json', this.cache);
+
+      return detail;
+    } catch (err) {
+      console.warn(`[TMDB] Failed to enrich "${name}":`, err);
+      return null;
+    }
+  }
+
+  // Batch enrich with rate limiting (TMDB: 40 req/10s)
+  async enrichBatch(
+    items: Array<{ streamId: number; name: string }>,
+    onProgress: (done: number, total: number) => void,
+    signal?: AbortSignal
+  ): Promise<Map<number, TMDBMovieDetail>> {
+    await this.init();
+    const results = new Map<number, TMDBMovieDetail>();
+    let done = 0;
+    const CHUNK = 5;
+    const DELAY = 300; // ms between chunks
+
+    for (let i = 0; i < items.length; i += CHUNK) {
+      if (signal?.aborted) break;
+      const chunk = items.slice(i, i + CHUNK);
+
+      await Promise.allSettled(chunk.map(async item => {
+        if (signal?.aborted) return;
+        const detail = await this.enrichMovie(item.streamId, item.name);
+        if (detail) results.set(item.streamId, detail);
+        onProgress(++done, items.length);
+      }));
+
+      if (i + CHUNK < items.length) {
+        await new Promise(r => setTimeout(r, DELAY));
+      }
+    }
+    return results;
+  }
+
+  // URL helpers
+  poster(path: string | null, size: 'w200' | 'w342' | 'w500' | 'original' = 'w342'): string {
+    return path ? `${IMG_BASE}/${size}${path}` : '';
+  }
+  backdrop(path: string | null, size: 'w780' | 'w1280' | 'original' = 'w1280'): string {
+    return path ? `${IMG_BASE}/${size}${path}` : '';
+  }
+  trailer(detail: TMDBMovieDetail): string | null {
+    const vid = detail.videos?.results.find(v => v.site === 'YouTube' && v.type === 'Trailer' && v.official);
+    return vid ? `https://www.youtube.com/watch?v=${vid.key}` : null;
+  }
+}
+
+// Create singleton
+let tmdbInstance: TMDBService | null = null;
+export const getTMDB = (apiKey: string, language?: string): TMDBService => {
+  if (!tmdbInstance || tmdbInstance['apiKey'] !== apiKey) {
+    tmdbInstance = new TMDBService(apiKey, language);
+  }
+  return tmdbInstance;
+};
+```
+
+Wire TMDB into VodGrid and MovieDetail:
+
+```typescript
+// hooks/useTmdbEnrichment.ts — React hook for TMDB batch enrichment
+
+export const useTmdbEnrichment = (
+  movies: XtreamMovie[],
+  settings: AppSettings
+) => {
+  const [tmdbData, setTmdbData] = useState<Map<number, TMDBMovieDetail>>(new Map());
+  const [enrichProgress, setEnrichProgress] = useState({ done: 0, total: 0 });
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!settings.tmdbEnabled || !settings.tmdbApiKey || movies.length === 0) return;
+
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+
+    const tmdb = getTMDB(settings.tmdbApiKey, settings.tmdbLanguage);
+
+    // Enrich first 500 movies on load, rest lazily
+    const firstBatch = movies.slice(0, 500).map(m => ({
+      streamId: m.stream_id,
+      name: m.name,
+    }));
+
+    setEnrichProgress({ done: 0, total: firstBatch.length });
+
+    tmdb.enrichBatch(
+      firstBatch,
+      (done, total) => setEnrichProgress({ done, total }),
+      abortRef.current.signal
+    ).then(data => {
+      setTmdbData(prev => new Map([...prev, ...data]));
+    });
+
+    return () => abortRef.current?.abort();
+  }, [movies, settings.tmdbEnabled, settings.tmdbApiKey, settings.tmdbLanguage]);
+
+  return { tmdbData, enrichProgress };
+};
+```
+
+---
+
+## 🟠 TIER 3 — INFRASTRUCTURE & DISTRIBUTION (TOP-3 POLISH)
+
+---
+
+### INFRA 1 — Auto-Updater (electron-updater)
+
+The package exists. Wire it up:
+
+```javascript
+// electron/main.cjs — Complete auto-update wiring
+
+const { autoUpdater } = require('electron-updater');
+const { app, BrowserWindow } = require('electron');
+
+function setupAutoUpdater(win) {
+  // ── Config ──────────────────────────────────────────────────────────────
+  autoUpdater.autoDownload = true;         // Download in background
+  autoUpdater.autoInstallOnAppQuit = true; // Install when user quits
+  autoUpdater.allowDowngrade = false;
+
+  // ── Push events to renderer ─────────────────────────────────────────────
+  autoUpdater.on('checking-for-update', () => {
+    win.webContents.send('update:checking');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    win.webContents.send('update:available', {
+      version: info.version,
+      releaseNotes: info.releaseNotes,
+      releaseDate: info.releaseDate,
+    });
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    win.webContents.send('update:not-available');
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    win.webContents.send('update:download-progress', {
+      percent: Math.round(progress.percent),
+      transferred: progress.transferred,
+      total: progress.total,
+      bytesPerSecond: progress.bytesPerSecond,
+    });
+    // Also update taskbar progress (Windows native)
+    win.setProgressBar(progress.percent / 100);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    win.setProgressBar(-1); // Clear taskbar progress
+    win.webContents.send('update:downloaded', { version: info.version });
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.error('[AutoUpdater] Error:', err);
+    win.webContents.send('update:error', { message: err.message });
+  });
+
+  // ── IPC handlers ────────────────────────────────────────────────────────
+  ipcMain.handle('update:check', async () => {
+    return autoUpdater.checkForUpdates();
+  });
+
+  ipcMain.handle('update:install-and-restart', () => {
+    app.isQuitting = true;
+    autoUpdater.quitAndInstall(true, true); // isSilent, isForceRunAfter
+  });
+
+  // ── Auto-check on startup (after 3 second delay) ─────────────────────
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch(err => {
+      console.warn('[AutoUpdater] Check failed (no network?):', err.message);
+    });
+  }, 3000);
+
+  // ── Periodic check every 4 hours ─────────────────────────────────────
+  setInterval(() => {
+    autoUpdater.checkForUpdates().catch(() => {});
+  }, 4 * 60 * 60 * 1000);
+}
+```
+
+Update Banner component for renderer:
+
+```typescript
+// components/UpdateBanner.tsx — In-app update notification
+
+import { useEffect, useState } from 'react';
+import { Download, RefreshCw, X, CheckCircle } from 'lucide-react';
+
+interface UpdateInfo {
+  version: string;
+  releaseNotes?: string;
+}
+
+interface DownloadProgress {
+  percent: number;
+  bytesPerSecond: number;
+}
+
+export const UpdateBanner: React.FC = () => {
+  const [state, setState] = useState<
+    | { type: 'idle' }
+    | { type: 'available'; info: UpdateInfo }
+    | { type: 'downloading'; progress: DownloadProgress }
+    | { type: 'ready'; info: UpdateInfo }
+  >({ type: 'idle' });
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    const handlers: [string, (data?: unknown) => void][] = [
+      ['update:available', (data) => {
+        setState({ type: 'available', info: data as UpdateInfo });
+        setDismissed(false);
+      }],
+      ['update:download-progress', (data) => {
+        setState({ type: 'downloading', progress: data as DownloadProgress });
+      }],
+      ['update:downloaded', (data) => {
+        setState({ type: 'ready', info: data as UpdateInfo });
+      }],
+    ];
+
+    handlers.forEach(([ch, fn]) => window.electronAPI?.on?.(ch, fn));
+    return () => handlers.forEach(([ch, fn]) => window.electronAPI?.off?.(ch, fn));
+  }, []);
+
+  if (dismissed || state.type === 'idle') return null;
+
+  return (
+    <div className="fixed top-10 left-1/2 -translate-x-1/2 z-[100]
+      bg-[#0a0a14] border border-white/15 rounded-2xl px-5 py-4
+      shadow-2xl backdrop-blur-md flex items-center gap-4
+      animate-in slide-in-from-top-4 duration-300"
+      style={{ minWidth: 360 }}
+    >
+      {state.type === 'available' && (
+        <>
+          <Download size={18} className="text-cyan-400 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-sm font-semibold">
+              Update Available — v{state.info.version}
+            </p>
+            <p className="text-white/50 text-xs">Downloading in background...</p>
+          </div>
+          <button onClick={() => setDismissed(true)} className="text-white/30 hover:text-white">
+            <X size={14} />
+          </button>
+        </>
+      )}
+
+      {state.type === 'downloading' && (
+        <>
+          <div className="w-5 h-5 rounded-full border-2 border-cyan-500/30 border-t-cyan-500 animate-spin shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="flex justify-between mb-1">
+              <span className="text-white text-sm font-semibold">Downloading update...</span>
+              <span className="text-cyan-400 text-sm font-mono">{state.progress.percent}%</span>
+            </div>
+            <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-cyan-500 rounded-full transition-all duration-300"
+                style={{ width: `${state.progress.percent}%` }}
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      {state.type === 'ready' && (
+        <>
+          <CheckCircle size={18} className="text-green-400 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-sm font-semibold">
+              v{state.info.version} ready to install
+            </p>
+            <p className="text-white/50 text-xs">Restart to apply the update</p>
+          </div>
+          <button
+            onClick={() => window.electronAPI?.invoke?.('update:install-and-restart')}
+            className="px-3 py-1.5 bg-green-500 text-black text-xs font-bold rounded-xl
+              hover:bg-green-400 transition-colors shrink-0"
+          >
+            Restart
+          </button>
+          <button onClick={() => setDismissed(true)} className="text-white/30 hover:text-white ml-1">
+            <X size={14} />
+          </button>
+        </>
+      )}
+    </div>
+  );
+};
+```
+
+Add to App.tsx:
+
+```typescript
+// App.tsx — Add UpdateBanner at root level
+return (
+  <>
+    <UpdateBanner />
+    {/* ... rest of app ... */}
+  </>
+);
+```
+
+Add preload whitelist entries:
+
+```javascript
+// electron/preload.cjs — Add update channels to whitelist
+const validChannels = [
+  'window:maximize-change',
+  'tray:play-pause',
+  'update:available',      // already whitelisted
+  'update:downloaded',     // already whitelisted
+  'update:checking',       // ADD
+  'update:download-progress', // ADD
+  'update:not-available',  // ADD
+  'update:error',          // ADD
+  'window:before-close',   // ADD
+];
+```
+
+---
+
+### INFRA 2 — EPG On-Disk Cache with Invalidation
+
+```typescript
+// services/xmltvEpg.ts — Add persistent cache layer
+
+const EPG_CACHE_FILE = 'epg-cache.json';
+const EPG_CACHE_VERSION = 2;
+
+interface EpgCacheEntry {
+  sourceUrl: string;
+  fetchedAt: number;
+  expiresAt: number;
+  channelCount: number;
+  programCount: number;
+  data: EPGData; // parsed EPG data
+}
+
+interface EpgCache {
+  version: number;
+  entries: Record<string, EpgCacheEntry>; // keyed by sourceUrl hash
+}
+
+const hashString = (str: string): string => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(36);
+};
+
+export const loadEpgCache = async (): Promise<EpgCache> => {
+  try {
+    const data = await getLargeData<EpgCache>(EPG_CACHE_FILE, {
+      version: EPG_CACHE_VERSION,
+      entries: {},
+    });
+    return data.version === EPG_CACHE_VERSION ? data : { version: EPG_CACHE_VERSION, entries: {} };
+  } catch {
+    return { version: EPG_CACHE_VERSION, entries: {} };
+  }
+};
+
+export const saveEpgCache = async (cache: EpgCache): Promise<void> => {
+  try {
+    await setLargeData(EPG_CACHE_FILE, cache);
+  } catch (err) {
+    console.warn('[EPG Cache] Failed to save:', err);
+  }
+};
+
+// Modified fetchXmltvSource to use cache
+export const fetchXmltvSourceCached = async (
+  source: XMLTVSource,
+  channels: XtreamChannel[],
+  refreshHours: number,
+  signal?: AbortSignal
+): Promise<EPGData | null> => {
+  const cache = await loadEpgCache();
+  const cacheKey = hashString(source.url);
+  const entry = cache.entries[cacheKey];
+
+  // Cache hit check
+  if (entry && Date.now() < entry.expiresAt) {
+    console.log(`[EPG] Cache hit for ${source.url} (${entry.programCount} programs)`);
+    return entry.data;
+  }
+
+  // Cache miss — fetch fresh
+  console.log(`[EPG] Cache miss for ${source.url} — fetching fresh`);
+  try {
+    const rawData = await fetchXmltvSource(source, signal);
+    if (!rawData) return null;
+
+    const parsed = parseXmltvXml(rawData);
+
+    // Update cache
+    cache.entries[cacheKey] = {
+      sourceUrl: source.url,
+      fetchedAt: Date.now(),
+      expiresAt: Date.now() + refreshHours * 60 * 60 * 1000,
+      channelCount: Object.keys(parsed.channels).length,
+      programCount: Object.values(parsed.programs).reduce((s, p) => s + p.length, 0),
+      data: parsed,
+    };
+
+    void saveEpgCache(cache); // async, non-blocking
+
+    return parsed;
+  } catch (err) {
+    // On fetch error, return stale cache if available (better than nothing)
+    if (entry) {
+      console.warn('[EPG] Fetch failed — using stale cache');
+      return entry.data;
+    }
+    throw err;
+  }
+};
+```
+
+---
+
+### INFRA 3 — Windows-Specific Native Integration
+
+```javascript
+// electron/main.cjs — Windows native features
+
+const { app, shell } = require('electron');
+
+// ── Jump List (right-click taskbar icon) ────────────────────────────────
+function setupJumpList() {
+  app.setJumpList([
+    {
+      type: 'tasks',
+      items: [
+        {
+          type: 'task',
+          title: 'Live TV',
+          description: 'Open Live TV',
+          program: process.execPath,
+          args: '--goto=live',
+          iconPath: process.execPath,
+          iconIndex: 0,
+        },
+        {
+          type: 'task',
+          title: 'Movies',
+          description: 'Browse Movies',
+          program: process.execPath,
+          args: '--goto=movies',
+          iconPath: process.execPath,
+          iconIndex: 0,
+        },
+        {
+          type: 'task',
+          title: 'Search',
+          description: 'Search channels and content',
+          program: process.execPath,
+          args: '--goto=search',
+          iconPath: process.execPath,
+          iconIndex: 0,
+        },
+      ],
+    },
+    { type: 'frequent' },
+    { type: 'recent' },
+  ]);
+}
+
+// ── Taskbar progress (used during downloads/updates) ─────────────────────
+// Already used in autoUpdater above — also use for EPG loading:
+ipcMain.handle('taskbar:set-progress', (_e, progress) => {
+  if (!win) return;
+  if (progress < 0) {
+    win.setProgressBar(-1); // Clear
+  } else {
+    win.setProgressBar(progress / 100, { mode: 'normal' });
+  }
+});
+
+// ── Flash taskbar on missed show/reminder ─────────────────────────────────
+ipcMain.handle('taskbar:flash', (_e, count = 3) => {
+  win?.flashFrame(true);
+  setTimeout(() => win?.flashFrame(false), count * 1000);
+});
+
+// Call setup after app ready:
+app.whenReady().then(() => {
+  setupJumpList();
+  loadMainSettings();
+  createWindow();
+});
+
+// ── Handle --goto args from Jump List ─────────────────────────────────────
+const deepLinkPage = process.argv.find(a => a.startsWith('--goto='))?.replace('--goto=', '');
+if (deepLinkPage && win) {
+  win.webContents.once('did-finish-load', () => {
+    win.webContents.send('app:deep-link', deepLinkPage);
+  });
+}
+```
+
+Handle deep link in App.tsx:
+
+```typescript
+// App.tsx — Handle deep links from Jump List / protocol
+useEffect(() => {
+  const handleDeepLink = (_event: unknown, page: string) => {
+    const validPages: AppPage[] = ['home', 'live', 'movies', 'series', 'search', 'favorites'];
+    if (validPages.includes(page as AppPage)) {
+      setCurrentPage(page as AppPage);
+    }
+  };
+  window.electronAPI?.on?.('app:deep-link', handleDeepLink);
+  return () => window.electronAPI?.off?.('app:deep-link', handleDeepLink);
+}, []);
+```
+
+---
+
+### INFRA 4 — Worker-Threaded VOD Filtering (50k+ Items)
+
+```typescript
+// workers/vodFilter.worker.ts — NEW FILE
+
+interface FilterMessage {
+  items: Array<{ stream_id?: number; series_id?: number; name: string; category_id: string }>;
+  query: string;
+  categoryId: string | null;
+}
+
+self.onmessage = (e: MessageEvent<FilterMessage>) => {
+  const { items, query, categoryId } = e.data;
+  const q = query.toLowerCase().trim();
+
+  const filtered = items.filter(item => {
+    if (categoryId && item.category_id !== categoryId) return false;
+    if (q && !item.name?.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  self.postMessage(filtered);
+};
+
+// hooks/useWorkerFilter.ts
+import { useEffect, useRef, useState } from 'react';
+
+export const useWorkerFilter = <T extends { name: string; category_id: string }>(
+  items: T[],
+  query: string,
+  categoryId: string | null,
+  debounceMs = 150
+): { filtered: T[]; isFiltering: boolean } => {
+  const [filtered, setFiltered] = useState<T[]>(items);
+  const [isFiltering, setIsFiltering] = useState(false);
+  const workerRef = useRef<Worker | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Init worker
+  useEffect(() => {
+    workerRef.current = new Worker(
+      new URL('../workers/vodFilter.worker.ts', import.meta.url),
+      { type: 'module' }
+    );
+    workerRef.current.onmessage = (e: MessageEvent<T[]>) => {
+      setFiltered(e.data);
+      setIsFiltering(false);
+    };
+    return () => workerRef.current?.terminate();
+  }, []);
+
+  // Debounced filter
+  useEffect(() => {
+    if (!workerRef.current || items.length === 0) return;
+
+    if (timerRef.current) clearTimeout(timerRef.current);
+
+    // For small datasets, skip debounce
+    if (items.length < 2000 && !query && !categoryId) {
+      setFiltered(items);
+      return;
+    }
+
+    setIsFiltering(true);
+    timerRef.current = setTimeout(() => {
+      workerRef.current?.postMessage({ items, query, categoryId });
+    }, debounceMs);
+
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [items, query, categoryId, debounceMs]);
+
+  return { filtered, isFiltering };
+};
+```
+
+Replace `useMemo` in VodGrid.tsx:
+
+```typescript
+// VodGrid.tsx — Replace useMemo filter with worker filter
+// ❌ REMOVE:
+// const filteredItems = useMemo(() => ...heavy filter..., [items, selectedCategoryId, debouncedQuery]);
+
+// ✅ ADD:
+const { filtered: filteredItems, isFiltering } = useWorkerFilter(
+  items,
+  debouncedQuery,
+  selectedCategoryId
+);
+```
+
+---
+
+### INFRA 5 — Logo Cache Service
+
+```typescript
+// services/logoCache.ts — Complete logo caching with Cache API + memory LRU
+
+const CACHE_NAME = 'dylandos-logos-v1';
+const MEM_CACHE_MAX = 400;
+const memCache = new Map<string, string>(); // originalUrl → objectUrl
+
+let cacheApi: Cache | null = null;
+
+const initCacheApi = async () => {
+  if (cacheApi) return cacheApi;
+  if ('caches' in window) {
+    cacheApi = await caches.open(CACHE_NAME);
+  }
+  return cacheApi;
+};
+
+const addToMemCache = (key: string, value: string): void => {
+  if (memCache.size >= MEM_CACHE_MAX) {
+    // LRU eviction — remove oldest
+    const first = memCache.keys().next().value;
+    if (first) {
+      URL.revokeObjectURL(memCache.get(first)!);
+      memCache.delete(first);
+    }
+  }
+  memCache.set(key, value);
+};
+
+export const resolveLogoUrl = async (originalUrl: string): Promise<string> => {
+  if (!originalUrl) return '';
+
+  // Memory cache hit
+  if (memCache.has(originalUrl)) return memCache.get(originalUrl)!;
+
+  const proxyBase = (window as any).electronAPI?.proxyBase ?? 'http://127.0.0.1:18899';
+  const proxiedUrl = `${proxyBase}/image?url=${encodeURIComponent(originalUrl)}`;
+
+  // Cache API hit
+  const cache = await initCacheApi();
+  if (cache) {
+    const cached = await cache.match(proxiedUrl);
+    if (cached) {
+      const blob = await cached.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      addToMemCache(originalUrl, objectUrl);
+      return objectUrl;
+    }
+  }
+
+  // Fetch, cache, and return
+  try {
+    const response = await fetch(proxiedUrl, { signal: AbortSignal.timeout(6000) });
+    if (!response.ok) return originalUrl;
+
+    if (cache) await cache.put(proxiedUrl, response.clone());
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    addToMemCache(originalUrl, objectUrl);
+    return objectUrl;
+  } catch {
+    return originalUrl; // Graceful fallback
+  }
+};
+
+// React hook
+export const useLogoUrl = (originalUrl: string): string => {
+  const [resolved, setResolved] = useState(originalUrl || '');
+
+  useEffect(() => {
+    if (!originalUrl) return;
+    let cancelled = false;
+    resolveLogoUrl(originalUrl).then(url => {
+      if (!cancelled) setResolved(url);
+    });
+    return () => { cancelled = true; };
+  }, [originalUrl]);
+
+  return resolved;
+};
+```
+
+Use in ChannelList.tsx and VodCard.tsx:
+
+```typescript
+// ChannelList.tsx — Replace direct img src with cached url
+const logoUrl = useLogoUrl(channel.stream_icon);
+// <img src={logoUrl} ... />
+
+// VodCard.tsx
+const posterUrl = useLogoUrl(item.stream_icon);
+```
+
+---
+
+## 📋 FINAL MASTER CHECKLIST — PATH TO TOP 3
+
+### 🔴 Critical — Wire These Now
+
+```
+□ Wire ProfileSelectionDialog into App.tsx (component already exists)
+□ Replace hardcoded reconnect constants with settings.liveReconnectMaxAttempts/BaseDelayMs
+□ Wire liveFormat setting into getLiveStreamUrl() call
+□ Add settings:sync IPC to push minimizeToTray/startWithWindows to main immediately
+□ Fix series episode ID collisions (compound key: seriesId_sX_eY)
+□ Wire setupAutoUpdater() in main.cjs (package already installed)
+□ Add UpdateBanner component to App.tsx
+□ Add update:* channels to preload whitelist
+```
+
+### 🟠 High Priority — Premium Features
+
+```
+□ EpgGrid component (full timeline horizontal scroll with NOW indicator)
+□ Wire EpgGrid into LiveTV.tsx with view toggle (Channel List / EPG Guide)
+□ useSeekPreview + seek thumbnail bar in VideoPlayer (VOD)
+□ useAutoPlayNext + countdown overlay in VideoPlayer
+□ Wire auto-play next into SeriesDetail.tsx episode end
+□ ToastProvider wrapping App in main.tsx
+□ Replace console logs / alert() with toast calls throughout
+□ useKeyboardShortcuts wired into App.tsx
+□ KeyboardTab in Settings showing shortcut reference
+□ Channel number jump OSD (useChannelNumberJump)
+□ StreamHealthIndicator in VideoPlayer top-right corner
+□ Wire stream health monitoring start/stop to stream load/unload
+```
+
+### 🟡 Important — Quality & Performance
+
+```
+□ Complete TMDB TMDBService with disk cache
+□ useTmdbEnrichment hook wired into VodGrid/Movies page
+□ Movie detail page showing enriched poster, backdrop, plot, cast, genres, trailer
+□ useWorkerFilter replacing useMemo in VodGrid (50k+ item performance)
+□ logoCache service replacing direct img src across ChannelList + VodCard
+□ EPG on-disk cache (fetchXmltvSourceCached) — don't re-fetch on every launch
+□ Complete Settings panel: all 9 tabs fully wired (not just rendering, but consuming values)
+□ mediaSession position state update on VOD timeupdate
+□ Add update channel whitelist entries to preload.cjs
+```
+
+### 🟢 Polish — Differentiators
+
+```
+□ Windows Jump List setup (Home / Live TV / Search tasks)
+□ Taskbar progress during update download
+□ app:deep-link handler for Jump List --goto= args
+□ Confirm-on-exit dialog wired (window:before-close IPC)
+□ Watchlist / My List feature (separate from Favorites — "want to watch" vs "liked")
+□ Program reminder notifications (Electron Notification API)
+□ Channel group/bouquet management (rename, reorder, hide groups)
+□ Subtitle renderer (apply subtitleFontSize/Color/Outline via CSS custom properties)
+□ Audio offset applied to video element (video.currentTime += audioOffsetMs/1000)
+□ Settings export/import to file (JSON via dialog:save-file)
+□ About tab: show version, check for updates button, open changelog
+□ App logo / icon in resources/ for NSIS installer and tray
+```
+
+---
+
+## 🏆 WHAT PUTS YOU IN THE TOP 3
+
+Here's the honest competitive breakdown once everything above is done:
+
+| App | Strengths | Your App After This Guide |
+|---|---|---|
+| **TiviMate (Android)** | UI polish, EPG grid, fast zapping | ✅ EPG grid ✅ Fast zapping ✅ Better Windows native |
+| **IPTV Smarters Pro** | Multi-platform, TMDB, clean | ✅ TMDB ✅ Cleaner design ✅ Better performance config |
+| **OTT Navigator** | Feature depth, custom layouts | ✅ More settings depth ✅ Keyboard shortcuts ✅ Native Windows |
+| **Kodi + PVR** | Extensibility | ✅ Out-of-box better ✅ No plugin dependencies |
+
+**What DYLANDOS IPTV ULTIMATE has that none of them do on Windows:**
+1. **Electron-native Windows 11** integration (Mica, Jump Lists, SMTC lock screen)
+2. **Per-mode stream configs** (live vs VOD tuned differently)
+3. **Stream health real-time indicator** baked into UI
+4. **Seek thumbnail scrubbing** — rare in IPTV players
+5. **Settings depth** (Live buffer presets, stash size, latency mode)
+6. **Auto-reconnect with visual feedback** — most players just crash
+7. **TMDB with disk cache** — full cast/crew/backdrop/trailer
+
+Fix the items in the Critical and High Priority tiers above and DYLANDOS IPTV ULTIMATE is genuinely top-3 on Windows. The bones are excellent. The remaining work is wiring, features, and distribution — not architectural problems. You're very close. 🏆🔥

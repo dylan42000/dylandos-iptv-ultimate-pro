@@ -1,0 +1,16 @@
+{
+  "versionCode": 32,
+  "version": "2.8.0",
+  "mandatory": false,
+  "releaseNotes": "• Update popup buttons always visible — changelog is now scrollable\n• Selected category remembered when returning from player (Live TV, Guide, Movies, Series)\n• Movie resume — picks up where you left off with a progress bar on the poster",
+  "flavors": {
+    "firestick": {
+      "apkUrl": "PENDING_UPLOAD",
+      "sha256": "PENDING"
+    },
+    "premium": {
+      "apkUrl": "PENDING_UPLOAD",
+      "sha256": "PENDING"
+    }
+  }
+}

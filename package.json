@@ -1,0 +1,97 @@
+{
+  "name": "dylandos-iptv-ultimate",
+  "version": "4.8.1",
+  "description": "DYLANDOS IPTV ULTIMATE — World-Class IPTV Player for Windows",
+  "main": "electron/main.cjs",
+  "author": "Dylandos",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:build": "vite build && electron-builder",
+    "electron:build:safe": "(taskkill /F /IM \"DYLANDOS IPTV ULTIMATE.exe\" /T >NUL 2>&1 || ver >NUL) && (taskkill /F /IM electron.exe /T >NUL 2>&1 || ver >NUL) && vite build && electron-builder",
+    "electron:start": "electron ."
+  },
+  "dependencies": {
+    "@types/react-window": "^1.8.8",
+    "electron-updater": "^6.3.9",
+    "hls.js": "^1.5.15",
+    "lucide-react": "^0.460.0",
+    "node-mpv": "^1.5.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-virtualized-auto-sizer": "^2.0.3",
+    "react-window": "^1.8.11"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^3.0.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.dylandos.iptv.ultimate",
+    "productName": "DYLANDOS IPTV ULTIMATE",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/mpv",
+        "to": "mpv",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "vendor/ffmpeg",
+        "to": "ffmpeg",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "resources/icon.ico",
+      "signingHashAlgorithms": [
+        "sha256"
+      ],
+      "signDlls": false,
+      "rfc3161TimeStampServer": "http://timestamp.digicert.com",
+      "publisherName": [],
+      "verifyUpdateCodeSignature": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "dylandos",
+        "repo": "iptv-ultimate"
+      }
+    ]
+  }
+}

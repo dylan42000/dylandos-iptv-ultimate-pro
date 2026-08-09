@@ -1,0 +1,43 @@
+{
+  "version": "4.3.0",
+  "versionCode": 53,
+  "releaseDate": "2026-05-15",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "FIX: VOD/series resume persistence is now wired end-to-end (periodic position updates + final save on every player exit path).",
+    "FIX: Series playback now carries full episode context into PlayerViewModel so watch history and resume rows save correctly.",
+    "FIX: Guide now maps Firestick MENU button to per-channel recording options (watch now, record now, record current, schedule next).",
+    "FIX: Home navigation actions now use debounced safe navigation to prevent duplicate-press crashes between Live/Movies/Series/Home transitions.",
+    "IMPROVEMENT: Channel zapping debounce reduced for faster switching without VLC teardown races.",
+    "IMPROVEMENT: DVR recording paths now disable frame skipping to improve long-session A/V continuity."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_4_3_0_LINK/app-firestick-release.apk?dl=1",
+      "apkSize": 59181837,
+      "sha256": "3f8d8d61947420f18a9aee96cea9d57473842726368383b1a135f372e40225de",
+      "minSdk": 21,
+      "targetSdk": 35,
+      "abi": [
+        "armeabi-v7a"
+      ]
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_PREMIUM_4_3_0_LINK/app-premium-release.apk?dl=1",
+      "apkSize": 60440277,
+      "sha256": "775fcadda453828d85887cab9ee04b57336ca355c6e98b0bf0a5d441e8462fcc",
+      "minSdk": 21,
+      "targetSdk": 35,
+      "abi": [
+        "arm64-v8a"
+      ]
+    }
+  },
+  "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_4_3_0_LINK/app-firestick-release.apk?dl=1",
+  "apkSize": 59181837,
+  "sha256": "3f8d8d61947420f18a9aee96cea9d57473842726368383b1a135f372e40225de",
+  "notes": "STEPS TO PUBLISH:\n1. Build both release flavors (firestick + premium).\n2. Upload APKs to Dropbox and copy direct links (dl=1).\n3. Replace REPLACE_WITH_FIRESTICK_4_3_0_LINK and REPLACE_WITH_PREMIUM_4_3_0_LINK with real Dropbox IDs.\n4. Save this file content as update.json in gist 6056e65b41641393abf585cecbd92d07."
+}

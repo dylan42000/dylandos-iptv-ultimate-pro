@@ -1,0 +1,53 @@
+{
+  "versionCode": 22,
+  "versionName": "2.1.0",
+  "apkUrl": "https://www.dropbox.com/YOUR_FIRESTICK_DROPBOX_LINK_HERE/app-firestick-release.apk?dl=1",
+  "releaseNotes": "v2.1.0: Full Guide fix (all channels per category), EPG deep-fix with XMLTV + fuzzy matching, Live TV now-playing EPG pass-through, Account tab redesigned as clean server switcher (up to 10), complete D-pad navigation pass across all screens.",
+  "changelog": [
+    "CRITICAL FIX: Guide was stuck at 5 channels — root cause was D-pad focus not auto-scrolling outside visible viewport. Added zapUp()/zapDown() in GuideViewModel + LaunchedEffect auto-scroll. All channels in selected category now fully navigable.",
+    "CRITICAL FIX: Guide layout height bug — channel column lacked fillMaxHeight() causing LazyColumn to get wrong height constraints. Fixed guide Row weight + column heights.",
+    "HIGH FIX: EPG coverage dramatically improved — switched from count-based threshold (>100) to time-based 4-hour TTL for XMLTV refresh. Threshold raised to >1000. On XMLTV failure falls back to batchShortEpg for ALL channels (not just 30).",
+    "HIGH FIX: EPG channel ID fuzzy matching — GuideViewModel now generates lowercase, no-suffix, .us and .uk variants of tvg-id for XMLTV lookup. Significantly increases EPG hit rate.",
+    "HIGH FIX: DVR storage picker moved from unreachable TopAppBar into Active tab content as a proper D-pad focusable card with onKeyEvent OK handler.",
+    "HIGH FIX: Account tab redesigned — removed raw credential form from 'My Accounts' tab. Now shows clean server switcher cards with active indicator and one-press Switch button. 'Manage Accounts' tab retains full add/edit/delete with limit raised to 10 accounts.",
+    "MEDIUM FIX: Live TV EPG now shows the currently AIRING show — checks startTimestamp <= now < stopTimestamp instead of blindly taking the first result.",
+    "MEDIUM FIX: Live TV channel list EPG loading is now viewport-based — removes the hard 100-channel cap. EPG loads as you scroll, only fetching channels not already cached.",
+    "MEDIUM FIX: SettingsViewModel account cap increased from 6 to 10.",
+    "BUMP: versionCode 21 → 22, versionName 2.0.0 → 2.1.0"
+  ],
+  "requirements": {
+    "minSdk": 21,
+    "targetSdk": 34,
+    "firestickOptimized": true,
+    "recommendedDevices": [
+      "Fire TV Stick 4K",
+      "Fire TV Stick 4K Max",
+      "Fire TV Stick Lite",
+      "Fire TV Cube",
+      "NVIDIA Shield",
+      "Chromecast with Google TV",
+      "Any Android 5.0+ device"
+    ]
+  },
+  "buildVariants": {
+    "firestick": {
+      "abi": "armeabi-v7a",
+      "target": "Fire TV Stick 4K (primary)",
+      "apkUrl": "https://www.dropbox.com/YOUR_FIRESTICK_DROPBOX_LINK_HERE/app-firestick-release.apk?dl=1",
+      "apkPath": "android/app/build/outputs/apk/firestick/release/app-firestick-release.apk"
+    },
+    "premium": {
+      "abi": "arm64-v8a",
+      "target": "High-end ARM64 Android devices",
+      "apkUrl": "https://www.dropbox.com/YOUR_PREMIUM_DROPBOX_LINK_HERE/app-premium-release.apk?dl=1",
+      "apkPath": "android/app/build/outputs/apk/premium/release/app-premium-release.apk"
+    }
+  },
+  "_instructions": {
+    "step1": "Upload app-firestick-release.apk to Dropbox, get shareable link, change ?dl=0 to ?dl=1",
+    "step2": "Upload app-premium-release.apk to Dropbox, get shareable link, change ?dl=0 to ?dl=1",
+    "step3": "Replace YOUR_FIRESTICK_DROPBOX_LINK_HERE and YOUR_PREMIUM_DROPBOX_LINK_HERE in apkUrl fields",
+    "step4": "Paste the entire JSON into your Gist at https://gist.github.com/DYLANDOS_GITHUB_USERNAME/6056e65b41641393abf585cecbd92d07",
+    "step5": "The app auto-checks this Gist on launch and shows update banner when versionCode > installed code"
+  }
+}

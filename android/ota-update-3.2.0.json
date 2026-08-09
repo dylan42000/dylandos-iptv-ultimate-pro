@@ -1,0 +1,41 @@
+{
+  "version": "3.2.0",
+  "versionCode": 39,
+  "releaseDate": "2026-04-28",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "FIX: Random app crashes while watching media are resolved — D-pad Close button was unreachable due to off-by-one in control count (8→9), causing focus to loop endlessly and eventually crash.",
+    "FIX: Firestick display no longer sleeps after 30 minutes during playback — upgraded to SCREEN_BRIGHT_WAKE_LOCK combined with FLAG_KEEP_SCREEN_ON and FLAG_TURN_SCREEN_ON for bulletproof screen-on during the entire playback session.",
+    "FIX: Movies category rail now correctly filters movie titles — Xtream Codes servers return category_id as a float (e.g. 12.0) in VOD streams but as a string (e.g. '12') in category lists; the mismatch is now normalized at parse time so every category maps correctly.",
+    "FIX: Firestick D-pad on Movies category rail now uses hover-select — movies update instantly as focus moves (Netflix/Prime style), no OK press required to see results.",
+    "FEATURE: 6 new intense neon UI themes — Neon Hot Pink, Neon Lamborghini Orange, Neon Smoke Grey, Neon Smoke White, Neon Charcoal Black, Neon Baby Blue — selectable in Settings → Appearance.",
+    "FEATURE: Subtitle outline color is now fully wired — choose from 8 color swatches (Black, Dark Navy, Dark Red, Dark Purple, Dark Green, Charcoal, White, Hot Pink) in Settings → Subtitles.",
+    "FEATURE: All subtitle settings (size, text color, outline color, background opacity) are now passed directly to LibVLC's freetype renderer and take effect on the next stream open.",
+    "FEATURE: DVR recordings are now organized into per-provider subfolders — files are saved as DVR/<server-hostname>/<filename>.ts, keeping multi-account libraries cleanly separated."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "PLACEHOLDER_FIRESTICK_URL",
+      "apkSize": 59056078,
+      "sha256": "C2700518695D50DBF492E71E512B1CB6C4C787CDA105E79816AD3ACFA59EA5CE",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["armeabi-v7a"]
+    },
+    "premium": {
+      "apkUrl": "PLACEHOLDER_PREMIUM_URL",
+      "apkSize": 60314677,
+      "sha256": "E4A24713FFBC3F2EE7FB7C15D6DF63CB18699B1E771CFF5EE2B241BACD4FBD9A",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["arm64-v8a"]
+    }
+  },
+  "apkUrl": "PLACEHOLDER_FIRESTICK_URL",
+  "apkSize": 59056078,
+  "sha256": "C2700518695D50DBF492E71E512B1CB6C4C787CDA105E79816AD3ACFA59EA5CE",
+  "notes": "STEPS TO PUBLISH:\n1. Upload app-firestick-release-3.2.0.apk to Dropbox → copy direct link (dl=1)\n2. Upload app-premium-release-3.2.0.apk to Dropbox → copy direct link (dl=1)\n3. Replace PLACEHOLDER_FIRESTICK_URL with the Firestick APK Dropbox link (both in flavors.firestick.apkUrl AND top-level apkUrl)\n4. Replace PLACEHOLDER_PREMIUM_URL with the Premium APK Dropbox link\n5. Save this file content as update.json in gist 6056e65b41641393abf585cecbd92d07"
+}

@@ -1,0 +1,17 @@
+{
+  "versionCode": 47,
+  "versionName": "3.9.1",
+  "releaseNotes": "v3.9.1: FireOS image pipeline hardening for Trex IPTV. Removed custom Coil MaxSizeInterceptor, forced software bitmap decoding with allowHardware(false), removed crossfade to prevent dual-bitmap OOM drops, and added User-Agent VLC/3.0.0 on network requests to avoid Trex/Cloudflare 403 image responses.",
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_LINK/app-firestick-release.apk?dl=1",
+      "apkSha256": "REPLACE_WITH_SHA256_AFTER_BUILD",
+      "apkSizeBytes": 0
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_PREMIUM_LINK/app-premium-release.apk?dl=1",
+      "apkSha256": "REPLACE_WITH_SHA256_AFTER_BUILD",
+      "apkSizeBytes": 0
+    }
+  }
+}

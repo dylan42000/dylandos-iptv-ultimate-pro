@@ -1,0 +1,2820 @@
+# DYLANDOS IPTV ULTIMATE — Master Fix & Elevation Manifest
+### From Broken → Top 1 Windows IPTV Player
+
+---
+
+# 🔴 SECTION 1: CRITICAL PLAYBACK FIXES (DO THESE FIRST)
+
+---
+
+## 1.1 — Live TV Audio Flash + Instant Rebuffer — Root Cause Diagnosis Tree
+
+This is almost always one of 5 culprits in MPV-on-Electron setups. Work through them in order:
+
+### CULPRIT A: Hardware Decode Crashing the Video Pipeline
+
+**Symptom:** Audio plays for < 1 second, video never appears, MPV silently restarts or rebuffers.
+
+**Why it happens:** `--hwdec=auto` or `--hwdec=d3d11va` picks a decoder that fails on the stream codec (HEVC, H.264 10-bit, etc.) and MPV falls back mid-stream — but your OSD state machine thinks it's still loading.
+
+**Fix in `electron/mpvManager.cjs` — `loadLiveStream()`:**
+
+```javascript
+// REPLACE your current hwdec application logic with this tiered approach:
+
+const hwdecMode = settings?.hwDecoding ?? 'auto-safe';
+
+const hwdecMap = {
+  'auto-safe':   'auto-safe',   // MPV's safest auto mode — use this as default
+  'auto':        'auto',
+  'd3d11va':     'd3d11va',
+  'dxva2':       'dxva2',
+  'software':    'no',
+  'no':          'no',
+};
+
+await mpvSetProperty('hwdec', hwdecMap[hwdecMode] ?? 'auto-safe');
+```
+
+**Critical:** Change your settings default in `src/types/settings.ts`:
+```typescript
+hwDecoding: 'auto-safe' as string,  // was probably 'auto' or 'd3d11va'
+```
+
+`auto-safe` tells MPV to use hardware decode only when it can guarantee a clean fallback. `auto` on some Windows driver configs silently fails.
+
+---
+
+### CULPRIT B: MPV `vo` (Video Output) Mismatch
+
+**The fix:** Force `gpu-next` as the primary VO with `d3d11` as the explicit GPU API:
+
+```javascript
+// In your MPV startup args array in mpvManager.cjs:
+'--vo=gpu-next',
+'--gpu-api=d3d11',
+'--gpu-context=d3d11',
+// REMOVE or comment out any --vo=gpu, --vo=d3d11 lines
+```
+
+If `gpu-next` still crashes on edge cases, add this fallback detection:
+
+```javascript
+// After mpv process spawns, listen to stderr for known VO crash patterns:
+mpvProcess.stderr.on('data', (data) => {
+  const msg = data.toString();
+  if (msg.includes('Failed to initialize') && msg.includes('vo')) {
+    // Auto-retry with software VO
+    retryWithSoftwareVO();
+  }
+});
+
+function retryWithSoftwareVO() {
+  console.log('[MPVManager] VO failed, retrying with software renderer');
+  mpvSetProperty('vo', 'libmpv').then(() => {
+    // re-issue the loadfile command
+    reloadCurrentStream();
+  });
+}
+```
+
+---
+
+### CULPRIT C: Stream URL Construction or Auth Token Expiry
+
+**The live URL for Xtream looks like:**
+`http://provider.host:PORT/live/USERNAME/PASSWORD/STREAM_ID.ts`
+
+The `.ts` extension is critical. Some providers also need `.m3u8`.
+
+**Add URL validation logging immediately before the `loadfile` call:**
+
+```javascript
+// In mpvManager.cjs loadLiveStream():
+console.log('[MPVManager] Live URL being loaded:', url);
+console.log('[MPVManager] URL protocol:', url.startsWith('http') ? 'OK' : 'BAD PROTOCOL');
+console.log('[MPVManager] URL extension:', url.split('.').pop());
+
+// Add extension auto-detection:
+const liveUrl = url.endsWith('.ts') || url.endsWith('.m3u8') 
+  ? url 
+  : url + '.ts';  // default to .ts for Xtream live
+
+await sendCommand({ command: ['loadfile', liveUrl, 'replace'] });
+```
+
+---
+
+### CULPRIT D: Named Pipe IPC Race Condition
+
+**Symptom:** MPV loads, IPC pipe connects, but the first `loadfile` arrives before MPV is fully idle-ready. It plays 0.5s of audio then the demuxer reinitializes.
+
+**Fix — add an MPV readiness gate before sending any stream commands:**
+
+```javascript
+// In mpvManager.cjs, replace your current "send when connected" logic:
+
+let mpvReady = false;
+let pendingStreamCommand = null;
+
+// In your pipe message handler:
+function handleMpvEvent(event) {
+  if (event.event === 'idle') {
+    mpvReady = true;
+    console.log('[MPVManager] MPV confirmed idle-ready');
+    if (pendingStreamCommand) {
+      executePendingStream();
+    }
+  }
+}
+
+// In loadLiveStream:
+async function loadLiveStream(url, settings) {
+  if (!mpvReady) {
+    console.log('[MPVManager] MPV not ready yet, queuing stream');
+    pendingStreamCommand = { type: 'live', url, settings };
+    return;
+  }
+  // ... rest of load logic
+}
+
+function executePendingStream() {
+  if (!pendingStreamCommand) return;
+  const cmd = pendingStreamCommand;
+  pendingStreamCommand = null;
+  if (cmd.type === 'live') loadLiveStream(cmd.url, cmd.settings);
+  if (cmd.type === 'vod') loadVodStream(cmd.url, cmd.startPos, cmd.settings);
+}
+```
+
+---
+
+### CULPRIT E: Cache-Pause Interaction with Buffering Events
+
+**The current config has `cache-pause=no`. This is correct for low latency but can cause audio-only flashes on poor streams.** Add adaptive cache-pause:
+
+```javascript
+// In loadLiveStream(), add these additional MPV properties:
+await mpvSetProperty('cache-pause-wait', '2');       // wait 2s before pausing on buffer
+await mpvSetProperty('cache-pause-initial', 'yes');  // pause to fill initial buffer  
+await mpvSetProperty('demuxer-cache-wait', 'yes');   // wait for some demuxer cache
+await mpvSetProperty('stream-lavf-o', 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
+// This last one is CRITICAL — it tells ffmpeg to auto-reconnect dropped streams
+```
+
+---
+
+### CULPRIT F: Complete Rebuffering Loop — Add Reconnect Logic
+
+```javascript
+// In mpvManager.cjs, add a proper reconnect handler:
+let reconnectTimer = null;
+let lastStreamUrl = null;
+let lastStreamType = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT = 5;
+
+function handlePlaybackError(event) {
+  if (lastStreamType !== 'live') return;
+  if (reconnectAttempts >= MAX_RECONNECT) {
+    sendToRenderer('mpv:error', { message: 'Stream unavailable after 5 attempts' });
+    reconnectAttempts = 0;
+    return;
+  }
+  
+  reconnectAttempts++;
+  const delay = Math.min(1000 * reconnectAttempts, 8000); // exponential backoff
+  
+  console.log(`[MPVManager] Reconnect attempt ${reconnectAttempts} in ${delay}ms`);
+  sendToRenderer('mpv:reconnecting', { attempt: reconnectAttempts, delay });
+  
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => {
+    loadLiveStream(lastStreamUrl, lastSettings);
+  }, delay);
+}
+
+// In your MPV event handler, map end-file reason:
+if (event.event === 'end-file') {
+  if (event.reason === 'error' || event.reason === 'stop') {
+    handlePlaybackError(event);
+  } else if (event.reason === 'eof') {
+    if (lastStreamType === 'live') handlePlaybackError(event); // live never EOFs legit
+  }
+}
+```
+
+---
+
+## 1.2 — VOD Restoration Checklist
+
+Since VOD was working and an AI revert broke it, here is the exact verification checklist:
+
+**Step 1 — Verify `VideoPlayerEngine.tsx` routes VOD correctly:**
+```typescript
+// In VideoPlayerEngine.tsx, the routing switch should look like this:
+// Make sure VOD is NOT being sent through the live path:
+
+const isLive = streamType === 'live';
+const isVod = streamType === 'vod' || streamType === 'movie' || streamType === 'series';
+
+useEffect(() => {
+  if (!streamUrl) return;
+  
+  if (isLive) {
+    window.electronAPI.invoke('mpv:load-live', { url: streamUrl, settings: mpvSettings });
+  } else if (isVod) {
+    window.electronAPI.invoke('mpv:load-vod', { 
+      url: streamUrl, 
+      startPosition: resumePosition ?? 0,
+      settings: mpvSettings 
+    });
+  }
+}, [streamUrl, streamType]);
+```
+
+**Step 2 — Verify the VOD URL construction in `xtreamApi.ts`:**
+```typescript
+// VOD stream URL format:
+getVodStreamUrl(streamId: number): string {
+  const { server, username, password } = this.profile;
+  // MUST include the stream extension — use .mp4 for VOD, not .ts
+  return `${server}/movie/${username}/${password}/${streamId}.mp4`;
+}
+
+// Series episode URL:
+getSeriesStreamUrl(streamId: number): string {
+  const { server, username, password } = this.profile;
+  return `${server}/series/${username}/${password}/${streamId}.mkv`;
+  // Some providers use .mp4 — try both, or strip extension and let MPV probe
+}
+```
+
+**Step 3 — Verify `mpvManager.cjs` `loadVodStream()` is not applying live-only properties:**
+```javascript
+async function loadVodStream(url, startPosition, settings) {
+  lastStreamUrl = url;
+  lastStreamType = 'vod';
+  reconnectAttempts = 0;  // reset reconnect for VOD
+  
+  // VOD-specific settings (DO NOT apply low-latency profile here):
+  await mpvSetProperty('profile', 'default');  // NOT low-latency
+  await mpvSetProperty('cache', 'yes');
+  await mpvSetProperty('demuxer-max-bytes', '512M');   // larger for VOD
+  await mpvSetProperty('demuxer-max-back-bytes', '256M');
+  await mpvSetProperty('cache-secs', '120');           // buffer ahead for VOD
+  
+  const command = ['loadfile', url, 'replace'];
+  if (startPosition && startPosition > 0) {
+    await mpvSetProperty('start', String(startPosition));
+  }
+  
+  await sendCommand({ command });
+}
+```
+
+---
+
+## 1.3 — EPG Guide Not Populating — Fix
+
+The EPG issue is almost always a **channel ID matching failure** between your XMLTV data and your Xtream channel list.
+
+**Step 1 — Add EPG matching diagnostics in `src/services/xmltvEpg.ts`:**
+
+```typescript
+// After parsing XMLTV, add this diagnostic:
+export function diagnoseEpgMatching(
+  channels: XtreamChannel[], 
+  epgData: ParsedEpgData
+): void {
+  const epgChannelIds = new Set(Object.keys(epgData.programs));
+  let matched = 0;
+  let unmatched: string[] = [];
+  
+  channels.forEach(ch => {
+    const epgId = ch.epg_channel_id || String(ch.stream_id);
+    if (epgChannelIds.has(epgId)) {
+      matched++;
+    } else {
+      unmatched.push(`${ch.name} (epg_id: ${epgId})`);
+    }
+  });
+  
+  console.log(`[EPG] Matched: ${matched}/${channels.length} channels`);
+  if (unmatched.length > 0) {
+    console.log('[EPG] Unmatched channels (first 20):', unmatched.slice(0, 20));
+  }
+}
+```
+
+**Step 2 — Implement fuzzy EPG channel matching:**
+
+```typescript
+// In xmltvEpg.ts, add fuzzy matching for when exact ID match fails:
+function normalizeChannelId(id: string): string {
+  return id
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[^a-z0-9]/g, '')
+    .replace(/hd$/, '')
+    .replace(/4k$/, '');
+}
+
+function findEpgChannelId(
+  channel: XtreamChannel, 
+  epgChannelMap: Map<string, string>
+): string | null {
+  // 1. Exact match on epg_channel_id
+  if (channel.epg_channel_id && epgChannelMap.has(channel.epg_channel_id)) {
+    return channel.epg_channel_id;
+  }
+  
+  // 2. Exact match on channel name
+  if (epgChannelMap.has(channel.name)) return channel.name;
+  
+  // 3. Fuzzy normalized match
+  const normalizedChannelName = normalizeChannelId(channel.name);
+  for (const [epgId] of epgChannelMap) {
+    if (normalizeChannelId(epgId) === normalizedChannelName) {
+      return epgId;
+    }
+  }
+  
+  // 4. Contains match (e.g., "ESPN" matches "ESPN HD")
+  for (const [epgId] of epgChannelMap) {
+    const normalizedEpgId = normalizeChannelId(epgId);
+    if (normalizedEpgId.includes(normalizedChannelName) || 
+        normalizedChannelName.includes(normalizedEpgId)) {
+      return epgId;
+    }
+  }
+  
+  return null;
+}
+```
+
+**Step 3 — Fix the EPG freeze — offload parsing properly:**
+
+```typescript
+// In xmltvEpg.ts, ensure the worker is actually being used and has error handling:
+async function parseXmltvWithWorker(xmlText: string): Promise<ParsedEpgData> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(
+      new URL('../workers/epgParser.worker.ts', import.meta.url),
+      { type: 'module' }
+    );
+    
+    const timeout = setTimeout(() => {
+      worker.terminate();
+      reject(new Error('EPG worker timed out after 30s'));
+    }, 30000);
+    
+    worker.onmessage = (e) => {
+      clearTimeout(timeout);
+      worker.terminate();
+      resolve(e.data);
+    };
+    
+    worker.onerror = (e) => {
+      clearTimeout(timeout);
+      worker.terminate();
+      // Fallback to main thread parsing if worker fails
+      console.warn('[EPG] Worker failed, falling back to main thread parse');
+      resolve(parseXmltvMainThread(xmlText));
+    };
+    
+    worker.postMessage({ xmlText });
+  });
+}
+```
+
+**Step 4 — EPG refresh without freezing the UI — staggered loading:**
+
+```typescript
+// In App.tsx, replace your EPG load block with a chunked loader:
+async function loadEpgInBackground(channels: XtreamChannel[]) {
+  setEpgStatus('loading');
+  
+  try {
+    const cached = await loadEpgFromCache();
+    if (cached && !isCacheStale(cached.timestamp, settings.epgRefreshHours)) {
+      setEpgData(cached.data);
+      setEpgStatus('ready');
+      return;
+    }
+    
+    // Load EPG sources in parallel but apply to state in chunks
+    const sources = settings.epgSources || [];
+    const results = await Promise.allSettled(
+      sources.map(src => fetchAndParseEpgSource(src))
+    );
+    
+    const merged: ParsedEpgData = { programs: {}, channels: {} };
+    results.forEach(result => {
+      if (result.status === 'fulfilled') {
+        Object.assign(merged.programs, result.value.programs);
+        Object.assign(merged.channels, result.value.channels);
+      }
+    });
+    
+    // Apply to state in a non-blocking way
+    await new Promise(resolve => setTimeout(resolve, 0)); // yield to React
+    setEpgData(merged);
+    setEpgStatus('ready');
+    
+    // Cache in background — don't await this
+    saveEpgToCache(merged).catch(console.error);
+    
+  } catch (err) {
+    console.error('[EPG] Load failed:', err);
+    setEpgStatus('error');
+  }
+}
+```
+
+---
+
+# 🟡 SECTION 2: ARCHITECTURE UPGRADES FOR TOP-1 STATUS
+
+---
+
+## 2.1 — Full Player Controls OSD (Subtitles + Closed Captions + All Controls)
+
+**Complete `MpvPlayer.tsx` OSD Component — Production Quality:**
+
+```typescript
+// src/components/MpvPlayer.tsx — Full OSD implementation
+
+interface PlayerControlsProps {
+  mpv: UseMpvReturn;
+  streamType: 'live' | 'vod' | 'series';
+  currentChannel?: XtreamChannel;
+  currentMovie?: VodStream;
+  epgNow?: EpgProgram;
+  epgNext?: EpgProgram;
+  onClose: () => void;
+}
+
+export function PlayerControls({ mpv, streamType, currentChannel, epgNow, onClose }: PlayerControlsProps) {
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [showSubMenu, setShowSubMenu] = useState(false);
+  const [showAudioMenu, setShowAudioMenu] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const hideTimer = useRef<ReturnType<typeof setTimeout>>();
+  
+  // Auto-hide controls after 4 seconds
+  const resetHideTimer = useCallback(() => {
+    setControlsVisible(true);
+    clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setControlsVisible(false), 4000);
+  }, []);
+  
+  useEffect(() => {
+    resetHideTimer();
+    return () => clearTimeout(hideTimer.current);
+  }, []);
+
+  return (
+    <div 
+      className="absolute inset-0 z-50"
+      onMouseMove={resetHideTimer}
+      onMouseLeave={() => setControlsVisible(false)}
+    >
+      {/* TOP BAR — Channel info + EPG */}
+      <AnimatePresence>
+        {controlsVisible && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="absolute top-0 left-0 right-0 p-4 
+                       bg-gradient-to-b from-black/80 to-transparent"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {currentChannel?.stream_icon && (
+                  <img src={currentChannel.stream_icon} className="h-8 w-auto" />
+                )}
+                <div>
+                  <p className="text-white font-bold text-lg">
+                    {currentChannel?.name}
+                  </p>
+                  {epgNow && (
+                    <p className="text-gray-300 text-sm">
+                      {epgNow.title} — {formatEpgTime(epgNow.start)} - {formatEpgTime(epgNow.stop)}
+                    </p>
+                  )}
+                </div>
+              </div>
+              
+              {/* Stats toggle */}
+              <button 
+                onClick={() => setShowStats(s => !s)}
+                className="text-gray-400 hover:text-white transition-colors p-2"
+              >
+                <ChartBarIcon className="w-5 h-5" />
+              </button>
+            </div>
+            
+            {/* EPG Progress Bar */}
+            {epgNow && (
+              <div className="mt-2 h-1 bg-white/20 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-blue-500 rounded-full transition-all duration-1000"
+                  style={{ width: `${getEpgProgress(epgNow)}%` }}
+                />
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* BOTTOM CONTROLS BAR */}
+      <AnimatePresence>
+        {controlsVisible && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="absolute bottom-0 left-0 right-0 p-4
+                       bg-gradient-to-t from-black/90 to-transparent"
+          >
+            {/* VOD Seek Bar */}
+            {streamType !== 'live' && (
+              <SeekBar 
+                position={mpv.state.position}
+                duration={mpv.state.duration}
+                onSeek={mpv.seek}
+                buffered={mpv.state.cachePercent}
+              />
+            )}
+            
+            {/* Control buttons row */}
+            <div className="flex items-center gap-4 mt-2">
+              {/* Left controls */}
+              <div className="flex items-center gap-2">
+                {streamType !== 'live' && (
+                  <IconButton 
+                    icon={<BackwardIcon />}
+                    onClick={() => mpv.seekRelative(-10)}
+                    label="-10s"
+                  />
+                )}
+                <IconButton
+                  icon={mpv.state.paused ? <PlayIcon /> : <PauseIcon />}
+                  onClick={mpv.togglePlayPause}
+                  label={mpv.state.paused ? 'Play' : 'Pause'}
+                  large
+                />
+                {streamType !== 'live' && (
+                  <IconButton
+                    icon={<ForwardIcon />}
+                    onClick={() => mpv.seekRelative(10)}
+                    label="+10s"
+                  />
+                )}
+                {streamType === 'live' && (
+                  <LiveBadge />  // Red LIVE pill badge
+                )}
+              </div>
+
+              {/* Volume */}
+              <VolumeControl
+                volume={mpv.state.volume}
+                muted={mpv.state.muted}
+                onChange={mpv.setVolume}
+                onToggleMute={mpv.setMute}
+              />
+
+              {/* Time display for VOD */}
+              {streamType !== 'live' && (
+                <span className="text-white text-sm font-mono">
+                  {formatTime(mpv.state.position)} / {formatTime(mpv.state.duration)}
+                </span>
+              )}
+
+              {/* Spacer */}
+              <div className="flex-1" />
+
+              {/* Right controls */}
+              <div className="flex items-center gap-2">
+                {/* Subtitles/CC */}
+                <SubtitleButton
+                  tracks={mpv.state.subtitleTracks}
+                  activeTrack={mpv.state.activeSubTrack}
+                  onSelect={mpv.setSubtitleTrack}
+                  onSettingsOpen={() => setShowSubMenu(s => !s)}
+                />
+                
+                {/* Audio track */}
+                <AudioTrackButton
+                  tracks={mpv.state.audioTracks}
+                  activeTrack={mpv.state.activeAudioTrack}
+                  onSelect={mpv.setAudioTrack}
+                />
+                
+                {/* Screenshot */}
+                <IconButton
+                  icon={<CameraIcon />}
+                  onClick={mpv.takeScreenshot}
+                  label="Screenshot"
+                />
+                
+                {/* DVR Record (live only) */}
+                {streamType === 'live' && (
+                  <RecordButton channelId={currentChannel?.stream_id} />
+                )}
+                
+                {/* Fullscreen */}
+                <IconButton
+                  icon={<ArrowsPointingOutIcon />}
+                  onClick={() => mpv.setFullscreen(true)}
+                  label="Fullscreen"
+                />
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* SUBTITLE SETTINGS PANEL */}
+      <AnimatePresence>
+        {showSubMenu && (
+          <SubtitleSettingsPanel
+            onClose={() => setShowSubMenu(false)}
+            onApply={mpv.applySubtitleSettings}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* STATS OVERLAY */}
+      <AnimatePresence>
+        {showStats && (
+          <StatsOverlay state={mpv.state} onClose={() => setShowStats(false)} />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+```
+
+---
+
+### Subtitle Settings Panel Component:
+
+```typescript
+// src/components/SubtitleSettingsPanel.tsx
+interface SubtitleSettings {
+  size: number;       // 10-200 (%)
+  color: string;      // hex
+  bgColor: string;    // hex with alpha
+  position: 'bottom' | 'top';
+  bold: boolean;
+  italic: boolean;
+  borderStyle: 'outline' | 'box' | 'none';
+}
+
+export function SubtitleSettingsPanel({ onClose, onApply }: SubtitleSettingsPanelProps) {
+  const [settings, setSettings] = useState<SubtitleSettings>({
+    size: 100,
+    color: '#ffffff',
+    bgColor: '#00000080',
+    position: 'bottom',
+    bold: false,
+    italic: false,
+    borderStyle: 'outline',
+  });
+
+  const apply = () => {
+    // Translate to MPV sub-* properties:
+    onApply({
+      'sub-scale': settings.size / 100,
+      'sub-color': hexToMpvColor(settings.color),
+      'sub-back-color': hexToMpvColor(settings.bgColor),
+      'sub-bold': settings.bold ? 'yes' : 'no',
+      'sub-italic': settings.italic ? 'yes' : 'no',
+      'sub-border-size': settings.borderStyle === 'none' ? '0' : '3',
+      'sub-pos': settings.position === 'top' ? '10' : '95',
+    });
+    onClose();
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 20 }}
+      className="absolute right-4 bottom-20 w-72 
+                 bg-gray-900/95 backdrop-blur-sm border border-white/10
+                 rounded-2xl p-4 shadow-2xl z-60"
+    >
+      <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+        <ChatBubbleBottomCenterTextIcon className="w-5 h-5" />
+        Subtitle Settings
+      </h3>
+      
+      {/* Size slider */}
+      <div className="mb-3">
+        <label className="text-gray-400 text-sm">Size: {settings.size}%</label>
+        <input 
+          type="range" min={50} max={200} value={settings.size}
+          onChange={e => setSettings(s => ({ ...s, size: Number(e.target.value) }))}
+          className="w-full accent-blue-500 mt-1"
+        />
+      </div>
+      
+      {/* Color pickers */}
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <label className="text-gray-400 text-xs">Text Color</label>
+          <input 
+            type="color" value={settings.color}
+            onChange={e => setSettings(s => ({ ...s, color: e.target.value }))}
+            className="w-full h-8 rounded cursor-pointer mt-1"
+          />
+        </div>
+        <div>
+          <label className="text-gray-400 text-xs">Background</label>
+          <input 
+            type="color" value={settings.bgColor.slice(0, 7)}
+            onChange={e => setSettings(s => ({ ...s, bgColor: e.target.value + '80' }))}
+            className="w-full h-8 rounded cursor-pointer mt-1"
+          />
+        </div>
+      </div>
+      
+      {/* Position toggle */}
+      <div className="flex gap-2 mb-3">
+        {(['bottom', 'top'] as const).map(pos => (
+          <button
+            key={pos}
+            onClick={() => setSettings(s => ({ ...s, position: pos }))}
+            className={`flex-1 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              settings.position === pos 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-white/5 text-gray-400 hover:text-white'
+            }`}
+          >
+            {pos.charAt(0).toUpperCase() + pos.slice(1)}
+          </button>
+        ))}
+      </div>
+      
+      {/* Bold / Italic toggles */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setSettings(s => ({ ...s, bold: !s.bold }))}
+          className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-colors ${
+            settings.bold ? 'bg-blue-600 text-white' : 'bg-white/5 text-gray-300'
+          }`}
+        >B</button>
+        <button
+          onClick={() => setSettings(s => ({ ...s, italic: !s.italic }))}
+          className={`px-3 py-1.5 rounded-lg text-sm italic transition-colors ${
+            settings.italic ? 'bg-blue-600 text-white' : 'bg-white/5 text-gray-300'
+          }`}
+        >I</button>
+      </div>
+      
+      <button
+        onClick={apply}
+        className="w-full py-2 bg-blue-600 hover:bg-blue-500 
+                   text-white rounded-xl font-semibold transition-colors"
+      >
+        Apply
+      </button>
+    </motion.div>
+  );
+}
+```
+
+---
+
+## 2.2 — DVR: 3 Simultaneous Recordings + 1 Live Watch
+
+**Update `electron/main.cjs` DVR handler — concurrent recording with named slot tracking:**
+
+```javascript
+// In main.cjs DVR section:
+
+const MAX_CONCURRENT_RECORDINGS = 3;
+const activeRecordings = new Map(); // key: channelId, value: { process, startTime, outputPath }
+
+ipcMain.handle('dvr:start', async (event, { channelId, channelName, streamUrl, outputDir }) => {
+  if (activeRecordings.size >= MAX_CONCURRENT_RECORDINGS) {
+    return { 
+      success: false, 
+      error: `Maximum ${MAX_CONCURRENT_RECORDINGS} simultaneous recordings reached` 
+    };
+  }
+  
+  if (activeRecordings.has(channelId)) {
+    return { success: false, error: 'Already recording this channel' };
+  }
+  
+  const ffmpegPath = getFFmpegPath();
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const safeChannelName = channelName.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_');
+  const outputFile = path.join(outputDir, `${safeChannelName}_${timestamp}.ts`);
+  
+  const args = [
+    '-y',                          // overwrite
+    '-i', streamUrl,               // input
+    '-c', 'copy',                  // copy streams without re-encoding (FAST)
+    '-f', 'mpegts',                // output format
+    '-movflags', '+faststart',
+    outputFile
+  ];
+  
+  const proc = spawn(ffmpegPath, args, { 
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: false
+  });
+  
+  activeRecordings.set(channelId, {
+    process: proc,
+    channelId,
+    channelName,
+    startTime: Date.now(),
+    outputPath: outputFile,
+    pid: proc.pid
+  });
+  
+  proc.on('exit', (code) => {
+    activeRecordings.delete(channelId);
+    // Notify renderer:
+    BrowserWindow.getAllWindows().forEach(w => 
+      w.webContents.send('dvr:recording-ended', { channelId, code, outputPath: outputFile })
+    );
+  });
+  
+  proc.stderr.on('data', (data) => {
+    // Parse FFmpeg progress from stderr:
+    const progressMatch = data.toString().match(/time=(\d{2}:\d{2}:\d{2})/);
+    if (progressMatch) {
+      BrowserWindow.getAllWindows().forEach(w =>
+        w.webContents.send('dvr:progress', { channelId, time: progressMatch[1] })
+      );
+    }
+  });
+  
+  console.log(`[DVR] Started recording: ${channelName} → ${outputFile} (PID: ${proc.pid})`);
+  return { success: true, outputPath: outputFile, pid: proc.pid };
+});
+
+ipcMain.handle('dvr:list-active', async () => {
+  return Array.from(activeRecordings.values()).map(r => ({
+    channelId: r.channelId,
+    channelName: r.channelName,
+    startTime: r.startTime,
+    outputPath: r.outputPath,
+    duration: Math.floor((Date.now() - r.startTime) / 1000)
+  }));
+});
+
+ipcMain.handle('dvr:slots', async () => ({
+  used: activeRecordings.size,
+  max: MAX_CONCURRENT_RECORDINGS,
+  available: MAX_CONCURRENT_RECORDINGS - activeRecordings.size
+}));
+```
+
+**DVR Status Bar Component (show in Live TV page):**
+
+```typescript
+// src/components/DvrStatusBar.tsx
+export function DvrStatusBar() {
+  const [recordings, setRecordings] = useState<ActiveRecording[]>([]);
+  const [slots, setSlots] = useState({ used: 0, max: 3, available: 3 });
+  
+  useEffect(() => {
+    const loadStatus = async () => {
+      const active = await window.electronAPI.invoke('dvr:list-active');
+      const slotInfo = await window.electronAPI.invoke('dvr:slots');
+      setRecordings(active);
+      setSlots(slotInfo);
+    };
+    
+    loadStatus();
+    const interval = setInterval(loadStatus, 5000);
+    
+    // Listen for real-time updates:
+    const unsub = window.electronAPI.on('dvr:recording-ended', loadStatus);
+    
+    return () => {
+      clearInterval(interval);
+      unsub?.();
+    };
+  }, []);
+  
+  if (recordings.length === 0) return null;
+  
+  return (
+    <div className="fixed bottom-4 right-4 z-50 space-y-2">
+      {/* Slot indicator */}
+      <div className="bg-gray-900/90 backdrop-blur rounded-xl px-3 py-2 
+                      border border-white/10 flex items-center gap-2">
+        <div className="flex gap-1">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div 
+              key={i}
+              className={`w-3 h-3 rounded-full ${
+                i < slots.used ? 'bg-red-500 animate-pulse' : 'bg-white/20'
+              }`}
+            />
+          ))}
+        </div>
+        <span className="text-white text-xs">
+          {slots.used}/{slots.max} DVR Slots
+        </span>
+      </div>
+      
+      {/* Individual recording pills */}
+      {recordings.map(rec => (
+        <motion.div
+          key={rec.channelId}
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="bg-red-900/80 backdrop-blur rounded-xl px-3 py-2
+                     border border-red-500/30 flex items-center gap-2"
+        >
+          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+          <span className="text-white text-xs font-medium truncate max-w-32">
+            {rec.channelName}
+          </span>
+          <span className="text-red-300 text-xs font-mono">
+            {formatDvrDuration(rec.duration)}
+          </span>
+          <button
+            onClick={() => window.electronAPI.invoke('dvr:stop', { channelId: rec.channelId })}
+            className="text-red-400 hover:text-white ml-1 transition-colors"
+          >
+            <StopIcon className="w-3 h-3" />
+          </button>
+        </motion.div>
+      ))}
+    </div>
+  );
+}
+```
+
+---
+
+# 🎨 SECTION 3: THREE NEON THEMES + FULL SETTINGS OVERHAUL
+
+---
+
+## 3.1 — Three Neon Themes
+
+**Define in `src/styles/themes.ts`:**
+
+```typescript
+export type ThemeId = 'cyberpunk' | 'matrix' | 'nova';
+
+export interface Theme {
+  id: ThemeId;
+  name: string;
+  description: string;
+  
+  // Background colors
+  bgPrimary: string;     // Main background
+  bgSecondary: string;   // Cards, panels
+  bgTertiary: string;    // Inputs, nested
+  bgOverlay: string;     // Modals
+  
+  // Neon accent colors
+  accentPrimary: string;   // Primary neon
+  accentSecondary: string; // Secondary neon
+  accentTertiary: string;  // Tertiary neon
+  
+  // Text colors
+  textPrimary: string;
+  textSecondary: string;
+  textMuted: string;
+  
+  // Glow effects (CSS box-shadow/text-shadow values)
+  glowPrimary: string;
+  glowSecondary: string;
+  
+  // Gradient backgrounds
+  gradientHero: string;
+  gradientCard: string;
+  
+  // Border
+  borderColor: string;
+  borderGlow: string;
+}
+
+export const themes: Record<ThemeId, Theme> = {
+  
+  // ═══════════════════════════════════════
+  // THEME 1: CYBERPUNK — Hot Pink + Electric Blue on Deep Black
+  // ═══════════════════════════════════════
+  cyberpunk: {
+    id: 'cyberpunk',
+    name: 'Cyberpunk',
+    description: 'Neon pink & electric blue on deep black',
+    
+    bgPrimary:   '#050509',
+    bgSecondary: '#0d0d18',
+    bgTertiary:  '#141428',
+    bgOverlay:   'rgba(5, 5, 9, 0.95)',
+    
+    accentPrimary:   '#ff2d78',   // Hot neon pink
+    accentSecondary: '#00d4ff',   // Electric cyan
+    accentTertiary:  '#bf00ff',   // Neon purple
+    
+    textPrimary:   '#ffffff',
+    textSecondary: '#b0b0c8',
+    textMuted:     '#606080',
+    
+    glowPrimary:   '0 0 20px rgba(255, 45, 120, 0.6), 0 0 40px rgba(255, 45, 120, 0.3)',
+    glowSecondary: '0 0 20px rgba(0, 212, 255, 0.6), 0 0 40px rgba(0, 212, 255, 0.3)',
+    
+    gradientHero: 'linear-gradient(135deg, #050509 0%, #1a0020 50%, #050509 100%)',
+    gradientCard: 'linear-gradient(135deg, rgba(255,45,120,0.1) 0%, rgba(0,212,255,0.05) 100%)',
+    
+    borderColor: 'rgba(255, 45, 120, 0.3)',
+    borderGlow:  '0 0 0 1px rgba(255, 45, 120, 0.5), 0 0 12px rgba(255, 45, 120, 0.2)',
+  },
+  
+  // ═══════════════════════════════════════
+  // THEME 2: MATRIX — Neon Green + Gold on Void Black
+  // ═══════════════════════════════════════
+  matrix: {
+    id: 'matrix',
+    name: 'Matrix',
+    description: 'Neon green & gold on void black',
+    
+    bgPrimary:   '#010800',
+    bgSecondary: '#030f00',
+    bgTertiary:  '#071800',
+    bgOverlay:   'rgba(1, 8, 0, 0.97)',
+    
+    accentPrimary:   '#00ff41',   // Matrix green
+    accentSecondary: '#ffd700',   // Gold
+    accentTertiary:  '#00cc44',   // Deeper green
+    
+    textPrimary:   '#e0ffe0',
+    textSecondary: '#88bb88',
+    textMuted:     '#3a5a3a',
+    
+    glowPrimary:   '0 0 20px rgba(0, 255, 65, 0.7), 0 0 40px rgba(0, 255, 65, 0.3)',
+    glowSecondary: '0 0 20px rgba(255, 215, 0, 0.6), 0 0 40px rgba(255, 215, 0, 0.2)',
+    
+    gradientHero: 'linear-gradient(135deg, #010800 0%, #021500 50%, #010800 100%)',
+    gradientCard: 'linear-gradient(135deg, rgba(0,255,65,0.08) 0%, rgba(255,215,0,0.04) 100%)',
+    
+    borderColor: 'rgba(0, 255, 65, 0.25)',
+    borderGlow:  '0 0 0 1px rgba(0, 255, 65, 0.4), 0 0 10px rgba(0, 255, 65, 0.15)',
+  },
+  
+  // ═══════════════════════════════════════
+  // THEME 3: NOVA — Electric Orange + Plasma Purple on Deep Space
+  // ═══════════════════════════════════════
+  nova: {
+    id: 'nova',
+    name: 'Nova',
+    description: 'Electric orange & plasma purple on deep space',
+    
+    bgPrimary:   '#04000a',
+    bgSecondary: '#0a0012',
+    bgTertiary:  '#120020',
+    bgOverlay:   'rgba(4, 0, 10, 0.96)',
+    
+    accentPrimary:   '#ff6b00',   // Electric orange
+    accentSecondary: '#aa00ff',   // Plasma purple
+    accentTertiary:  '#ff3d00',   // Deep orange
+    
+    textPrimary:   '#fff4e0',
+    textSecondary: '#c090b0',
+    textMuted:     '#604060',
+    
+    glowPrimary:   '0 0 20px rgba(255, 107, 0, 0.7), 0 0 40px rgba(255, 107, 0, 0.3)',
+    glowSecondary: '0 0 20px rgba(170, 0, 255, 0.6), 0 0 40px rgba(170, 0, 255, 0.25)',
+    
+    gradientHero: 'linear-gradient(135deg, #04000a 0%, #1a0030 50%, #04000a 100%)',
+    gradientCard: 'linear-gradient(135deg, rgba(255,107,0,0.1) 0%, rgba(170,0,255,0.06) 100%)',
+    
+    borderColor: 'rgba(255, 107, 0, 0.3)',
+    borderGlow:  '0 0 0 1px rgba(255, 107, 0, 0.45), 0 0 12px rgba(255, 107, 0, 0.15)',
+  },
+};
+```
+
+**Apply theme via CSS custom properties for maximum performance:**
+
+```typescript
+// src/hooks/useTheme.ts
+export function useTheme() {
+  const { settings } = useSettings();
+  
+  useEffect(() => {
+    const theme = themes[settings.theme as ThemeId] ?? themes.cyberpunk;
+    const root = document.documentElement;
+    
+    // Apply all theme values as CSS custom properties:
+    root.style.setProperty('--bg-primary', theme.bgPrimary);
+    root.style.setProperty('--bg-secondary', theme.bgSecondary);
+    root.style.setProperty('--bg-tertiary', theme.bgTertiary);
+    root.style.setProperty('--bg-overlay', theme.bgOverlay);
+    root.style.setProperty('--accent-primary', theme.accentPrimary);
+    root.style.setProperty('--accent-secondary', theme.accentSecondary);
+    root.style.setProperty('--accent-tertiary', theme.accentTertiary);
+    root.style.setProperty('--text-primary', theme.textPrimary);
+    root.style.setProperty('--text-secondary', theme.textSecondary);
+    root.style.setProperty('--text-muted', theme.textMuted);
+    root.style.setProperty('--glow-primary', theme.glowPrimary);
+    root.style.setProperty('--glow-secondary', theme.glowSecondary);
+    root.style.setProperty('--gradient-hero', theme.gradientHero);
+    root.style.setProperty('--gradient-card', theme.gradientCard);
+    root.style.setProperty('--border-color', theme.borderColor);
+    root.style.setProperty('--border-glow', theme.borderGlow);
+    
+    // Also set data attribute for CSS selectors:
+    root.setAttribute('data-theme', theme.id);
+    
+  }, [settings.theme]);
+}
+```
+
+**Tailwind CSS custom properties integration in `tailwind.config.ts`:**
+
+```javascript
+// tailwind.config.ts
+export default {
+  content: ['./src/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        'bg-primary':    'var(--bg-primary)',
+        'bg-secondary':  'var(--bg-secondary)',
+        'bg-tertiary':   'var(--bg-tertiary)',
+        'accent':        'var(--accent-primary)',
+        'accent-2':      'var(--accent-secondary)',
+        'accent-3':      'var(--accent-tertiary)',
+        'text-base':     'var(--text-primary)',
+        'text-sub':      'var(--text-secondary)',
+        'text-dim':      'var(--text-muted)',
+      },
+      boxShadow: {
+        'neon':          'var(--glow-primary)',
+        'neon-2':        'var(--glow-secondary)',
+        'neon-border':   'var(--border-glow)',
+      },
+      backgroundImage: {
+        'hero-gradient': 'var(--gradient-hero)',
+        'card-gradient': 'var(--gradient-card)',
+      },
+    },
+  },
+};
+```
+
+**Theme Picker Component:**
+
+```typescript
+// src/components/ThemePicker.tsx
+export function ThemePicker() {
+  const { settings, updateSettings } = useSettings();
+  
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      {Object.values(themes).map(theme => (
+        <button
+          key={theme.id}
+          onClick={() => updateSettings({ theme: theme.id })}
+          className={`relative p-4 rounded-2xl border-2 transition-all duration-300 overflow-hidden ${
+            settings.theme === theme.id 
+              ? 'border-white/60 scale-105' 
+              : 'border-white/10 hover:border-white/30'
+          }`}
+          style={{ 
+            background: theme.gradientHero,
+            boxShadow: settings.theme === theme.id ? theme.glowPrimary : 'none'
+          }}
+        >
+          {/* Preview swatches */}
+          <div className="flex gap-1.5 mb-3">
+            {[theme.accentPrimary, theme.accentSecondary, theme.accentTertiary].map((color, i) => (
+              <div 
+                key={i}
+                className="w-5 h-5 rounded-full"
+                style={{ 
+                  backgroundColor: color,
+                  boxShadow: `0 0 8px ${color}80`
+                }}
+              />
+            ))}
+          </div>
+          
+          {/* Theme name */}
+          <p 
+            className="font-bold text-sm"
+            style={{ color: theme.accentPrimary, textShadow: theme.glowPrimary }}
+          >
+            {theme.name}
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: theme.textMuted }}>
+            {theme.description}
+          </p>
+          
+          {/* Active checkmark */}
+          {settings.theme === theme.id && (
+            <div 
+              className="absolute top-2 right-2 w-5 h-5 rounded-full 
+                         flex items-center justify-center"
+              style={{ backgroundColor: theme.accentPrimary }}
+            >
+              <CheckIcon className="w-3 h-3 text-black" />
+            </div>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+```
+
+---
+
+## 3.2 — Complete Settings Page with Save Button
+
+```typescript
+// src/pages/SettingsPage.tsx — Full implementation
+export function SettingsPage() {
+  const { settings, updateSettings } = useSettings();
+  const [draft, setDraft] = useState<Settings>({ ...settings });
+  const [isDirty, setIsDirty] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  
+  // Track changes from the original
+  const updateDraft = useCallback((changes: Partial<Settings>) => {
+    setDraft(prev => ({ ...prev, ...changes }));
+    setIsDirty(true);
+    setSaveStatus('idle');
+  }, []);
+  
+  // SAVE function — persists to both localStorage and main-process settings file:
+  const handleSave = async () => {
+    setSaveStatus('saving');
+    try {
+      updateSettings(draft);
+      
+      // Sync critical settings to main process:
+      await window.electronAPI.invoke('settings:sync', {
+        hwDecoding: draft.hwDecoding,
+        mpvLiveBufferPreset: draft.mpvLiveBufferPreset,
+        preferredEngine: draft.preferredEngine,
+        dvrOutputDir: draft.dvrOutputDir,
+        audioDelay: draft.audioDelay,
+      });
+      
+      setIsDirty(false);
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 2500);
+      
+    } catch (err) {
+      console.error('[Settings] Save failed:', err);
+      setSaveStatus('error');
+    }
+  };
+  
+  const handleDiscard = () => {
+    setDraft({ ...settings });
+    setIsDirty(false);
+    setSaveStatus('idle');
+  };
+  
+  return (
+    <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
+      
+      {/* Sticky header with save bar */}
+      <div className="sticky top-0 z-40 bg-[var(--bg-primary)]/90 backdrop-blur-md
+                      border-b border-[var(--border-color)] px-6 py-4">
+        <div className="flex items-center justify-between max-w-4xl mx-auto">
+          <h1 className="text-2xl font-bold">Settings</h1>
+          
+          <div className="flex items-center gap-3">
+            {isDirty && (
+              <span className="text-yellow-400 text-sm flex items-center gap-1.5">
+                <ExclamationTriangleIcon className="w-4 h-4" />
+                Unsaved changes
+              </span>
+            )}
+            
+            <button
+              onClick={handleDiscard}
+              disabled={!isDirty}
+              className="px-4 py-2 rounded-xl text-sm font-medium
+                         bg-white/5 hover:bg-white/10 disabled:opacity-30
+                         transition-all"
+            >
+              Discard
+            </button>
+            
+            <button
+              onClick={handleSave}
+              disabled={!isDirty || saveStatus === 'saving'}
+              className={`px-6 py-2 rounded-xl text-sm font-bold 
+                         transition-all duration-200 flex items-center gap-2
+                         ${isDirty 
+                           ? 'bg-[var(--accent-primary)] text-black hover:brightness-110 shadow-[var(--glow-primary)]' 
+                           : 'bg-white/10 text-white/40'
+                         }
+                         disabled:cursor-not-allowed`}
+            >
+              {saveStatus === 'saving' && <SpinnerIcon className="w-4 h-4 animate-spin" />}
+              {saveStatus === 'saved' && <CheckIcon className="w-4 h-4" />}
+              {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved!' : 'Save Settings'}
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
+        
+        {/* ─── APPEARANCE ─── */}
+        <SettingsSection title="Appearance" icon={<SwatchIcon />}>
+          <SettingsRow label="Theme" description="Choose your visual style">
+            <ThemePicker />
+          </SettingsRow>
+        </SettingsSection>
+        
+        {/* ─── PLAYBACK ─── */}
+        <SettingsSection title="Playback" icon={<PlayCircleIcon />}>
+          
+          <SettingsRow label="Preferred Engine" description="MPV for best quality, HLS for compatibility">
+            <ToggleGroup
+              options={[
+                { value: 'mpv', label: 'MPV (Recommended)' },
+                { value: 'hls', label: 'HLS Fallback' },
+              ]}
+              value={draft.preferredEngine}
+              onChange={v => updateDraft({ preferredEngine: v })}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Hardware Decoding" description="GPU decoding for lower CPU usage">
+            <Select
+              value={draft.hwDecoding ?? 'auto-safe'}
+              onChange={v => updateDraft({ hwDecoding: v })}
+              options={[
+                { value: 'auto-safe', label: 'Auto Safe (Recommended)' },
+                { value: 'auto', label: 'Auto' },
+                { value: 'd3d11va', label: 'D3D11VA' },
+                { value: 'dxva2', label: 'DXVA2 (Legacy)' },
+                { value: 'no', label: 'Software Only' },
+              ]}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Live Buffer Size" description="Larger = more stable, higher latency">
+            <ToggleGroup
+              options={[
+                { value: 'low', label: 'Low Latency' },
+                { value: 'medium', label: 'Balanced' },
+                { value: 'high', label: 'High Stability' },
+              ]}
+              value={draft.mpvLiveBufferPreset ?? 'medium'}
+              onChange={v => updateDraft({ mpvLiveBufferPreset: v })}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Audio Delay (ms)" description="Sync audio with video (-500 to +500)">
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={-500} max={500} step={25}
+                value={draft.audioDelay ?? 0}
+                onChange={e => updateDraft({ audioDelay: Number(e.target.value) })}
+                className="w-40 accent-[var(--accent-primary)]"
+              />
+              <span className="text-sm font-mono w-16 text-center
+                               bg-white/5 rounded-lg py-1">
+                {draft.audioDelay ?? 0}ms
+              </span>
+              <button
+                onClick={() => updateDraft({ audioDelay: 0 })}
+                className="text-xs text-[var(--text-muted)] hover:text-white transition-colors"
+              >
+                Reset
+              </button>
+            </div>
+          </SettingsRow>
+          
+          <SettingsRow label="Auto-Resume VOD" description="Continue watching where you left off">
+            <Toggle
+              value={draft.autoResume ?? true}
+              onChange={v => updateDraft({ autoResume: v })}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Remember Volume" description="Restore volume between sessions">
+            <Toggle
+              value={draft.rememberVolume ?? true}
+              onChange={v => updateDraft({ rememberVolume: v })}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Default Volume" description="Starting volume level">
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={0} max={100}
+                value={draft.defaultVolume ?? 80}
+                onChange={e => updateDraft({ defaultVolume: Number(e.target.value) })}
+                className="w-40 accent-[var(--accent-primary)]"
+              />
+              <span className="text-sm font-mono text-[var(--text-secondary)]">
+                {draft.defaultVolume ?? 80}%
+              </span>
+            </div>
+          </SettingsRow>
+          
+          <SettingsRow label="Screenshot Directory" description="Where screenshots are saved">
+            <PathPicker
+              value={draft.screenshotDir ?? ''}
+              onChange={v => updateDraft({ screenshotDir: v })}
+              placeholder="Same as DVR output"
+            />
+          </SettingsRow>
+        </SettingsSection>
+        
+        {/* ─── EPG / GUIDE ─── */}
+        <SettingsSection title="Guide & EPG" icon={<CalendarIcon />}>
+          
+          <SettingsRow label="EPG Enabled" description="Show program guide data">
+            <Toggle
+              value={draft.epgEnabled ?? true}
+              onChange={v => updateDraft({ epgEnabled: v })}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Refresh Interval" description="How often to update guide data">
+            <Select
+              value={String(draft.epgRefreshHours ?? 6)}
+              onChange={v => updateDraft({ epgRefreshHours: Number(v) })}
+              options={[
+                { value: '1', label: 'Every hour' },
+                { value: '3', label: 'Every 3 hours' },
+                { value: '6', label: 'Every 6 hours' },
+                { value: '12', label: 'Every 12 hours' },
+                { value: '24', label: 'Once a day' },
+              ]}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="EPG Match Mode" description="How channels are matched to guide data">
+            <Select
+              value={draft.epgMatchMode ?? 'fuzzy'}
+              onChange={v => updateDraft({ epgMatchMode: v })}
+              options={[
+                { value: 'exact', label: 'Exact ID match only' },
+                { value: 'fuzzy', label: 'Fuzzy match (Recommended)' },
+                { value: 'name', label: 'Channel name match' },
+              ]}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Guide Days" description="Days of guide data to load">
+            <Select
+              value={String(draft.epgDays ?? 3)}
+              onChange={v => updateDraft({ epgDays: Number(v) })}
+              options={[
+                { value: '1', label: '1 day' },
+                { value: '3', label: '3 days (Recommended)' },
+                { value: '7', label: '7 days' },
+              ]}
+            />
+          </SettingsRow>
+        </SettingsSection>
+        
+        {/* ─── DVR ─── */}
+        <SettingsSection title="DVR & Recording" icon={<VideoCameraIcon />}>
+          
+          <SettingsRow label="Recording Directory" description="Where recordings are saved">
+            <PathPicker
+              value={draft.dvrOutputDir ?? ''}
+              onChange={v => updateDraft({ dvrOutputDir: v })}
+              placeholder="C:\\Users\\You\\Videos\\DYLANDOS"
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Recording Format" description="Container format for recordings">
+            <ToggleGroup
+              options={[
+                { value: 'ts', label: 'MPEG-TS (.ts)' },
+                { value: 'mkv', label: 'MKV (.mkv)' },
+                { value: 'mp4', label: 'MP4 (.mp4)' },
+              ]}
+              value={draft.dvrFormat ?? 'ts'}
+              onChange={v => updateDraft({ dvrFormat: v })}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Max Simultaneous Recordings" description="Currently supports up to 3">
+            <div className="flex items-center gap-2">
+              {[1, 2, 3].map(n => (
+                <button
+                  key={n}
+                  onClick={() => updateDraft({ dvrMaxConcurrent: n })}
+                  className={`w-10 h-10 rounded-xl font-bold text-sm transition-all ${
+                    (draft.dvrMaxConcurrent ?? 3) === n
+                      ? 'bg-[var(--accent-primary)] text-black shadow-[var(--glow-primary)]'
+                      : 'bg-white/5 text-white hover:bg-white/10'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </SettingsRow>
+          
+          <SettingsRow label="Auto-Delete Old Recordings" description="Remove recordings older than X days">
+            <div className="flex items-center gap-3">
+              <Toggle
+                value={draft.dvrAutoDelete ?? false}
+                onChange={v => updateDraft({ dvrAutoDelete: v })}
+              />
+              {draft.dvrAutoDelete && (
+                <Select
+                  value={String(draft.dvrAutoDeleteDays ?? 30)}
+                  onChange={v => updateDraft({ dvrAutoDeleteDays: Number(v) })}
+                  options={[
+                    { value: '7', label: '7 days' },
+                    { value: '14', label: '14 days' },
+                    { value: '30', label: '30 days' },
+                    { value: '60', label: '60 days' },
+                    { value: '90', label: '90 days' },
+                  ]}
+                />
+              )}
+            </div>
+          </SettingsRow>
+        </SettingsSection>
+        
+        {/* ─── SUBTITLES ─── */}
+        <SettingsSection title="Subtitles & Captions" icon={<ChatBubbleBottomCenterTextIcon />}>
+          
+          <SettingsRow label="Default Subtitle Language" description="Preferred subtitle track language">
+            <Select
+              value={draft.subtitleLanguage ?? 'eng'}
+              onChange={v => updateDraft({ subtitleLanguage: v })}
+              options={[
+                { value: 'off', label: 'Off by default' },
+                { value: 'eng', label: 'English' },
+                { value: 'spa', label: 'Spanish' },
+                { value: 'fre', label: 'French' },
+                { value: 'por', label: 'Portuguese' },
+                { value: 'ger', label: 'German' },
+              ]}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Subtitle Size" description="Default subtitle font size">
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={50} max={200}
+                value={draft.subtitleSize ?? 100}
+                onChange={e => updateDraft({ subtitleSize: Number(e.target.value) })}
+                className="w-40 accent-[var(--accent-primary)]"
+              />
+              <span className="text-sm font-mono">{draft.subtitleSize ?? 100}%</span>
+            </div>
+          </SettingsRow>
+          
+          <SettingsRow label="Subtitle Color">
+            <input
+              type="color"
+              value={draft.subtitleColor ?? '#ffffff'}
+              onChange={e => updateDraft({ subtitleColor: e.target.value })}
+              className="w-12 h-8 rounded cursor-pointer"
+            />
+          </SettingsRow>
+        </SettingsSection>
+        
+        {/* ─── NETWORK ─── */}
+        <SettingsSection title="Network" icon={<GlobeAltIcon />}>
+          
+          <SettingsRow label="Connection Timeout" description="Seconds before giving up on a connection">
+            <Select
+              value={String(draft.connectionTimeout ?? 10)}
+              onChange={v => updateDraft({ connectionTimeout: Number(v) })}
+              options={[
+                { value: '5', label: '5 seconds' },
+                { value: '10', label: '10 seconds' },
+                { value: '15', label: '15 seconds' },
+                { value: '30', label: '30 seconds' },
+              ]}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="User Agent" description="Identify as a different IPTV player">
+            <Select
+              value={draft.userAgent ?? 'IPTVSmartersPro'}
+              onChange={v => updateDraft({ userAgent: v })}
+              options={[
+                { value: 'IPTVSmartersPro', label: 'IPTV Smarters Pro' },
+                { value: 'TiviMate', label: 'TiviMate' },
+                { value: 'VLC/3.0', label: 'VLC' },
+                { value: 'Kodi', label: 'Kodi' },
+                { value: 'custom', label: 'Custom...' },
+              ]}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Max Reconnect Attempts" description="Before showing error state">
+            <ToggleGroup
+              options={[
+                { value: '3', label: '3' },
+                { value: '5', label: '5' },
+                { value: '10', label: '10' },
+                { value: '0', label: 'Unlimited' },
+              ]}
+              value={String(draft.maxReconnectAttempts ?? 5)}
+              onChange={v => updateDraft({ maxReconnectAttempts: Number(v) })}
+            />
+          </SettingsRow>
+        </SettingsSection>
+        
+        {/* ─── ADVANCED ─── */}
+        <SettingsSection title="Advanced" icon={<CogIcon />} collapsible>
+          
+          <SettingsRow label="MPV Additional Arguments" description="Extra flags passed to MPV at startup">
+            <input
+              type="text"
+              value={draft.mpvExtraArgs ?? ''}
+              onChange={e => updateDraft({ mpvExtraArgs: e.target.value })}
+              placeholder="e.g. --deinterlace=yes"
+              className="bg-[var(--bg-tertiary)] border border-[var(--border-color)]
+                         rounded-xl px-3 py-2 text-sm font-mono w-72
+                         focus:outline-none focus:border-[var(--accent-primary)]
+                         transition-colors"
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Enable Debug Logging" description="Write detailed logs to release/logs/">
+            <Toggle
+              value={draft.debugLogging ?? false}
+              onChange={v => updateDraft({ debugLogging: v })}
+            />
+          </SettingsRow>
+          
+          <SettingsRow label="Clear EPG Cache">
+            <button
+              onClick={() => clearEpgCache()}
+              className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl
+                         text-sm transition-colors border border-[var(--border-color)]"
+            >
+              Clear Cache
+            </button>
+          </SettingsRow>
+          
+          <SettingsRow label="Reset All Settings">
+            <button
+              onClick={() => {
+                if (confirm('Reset all settings to defaults?')) {
+                  setDraft({ ...DEFAULT_SETTINGS });
+                  setIsDirty(true);
+                }
+              }}
+              className="px-4 py-2 bg-red-900/40 hover:bg-red-900/60 
+                         border border-red-500/30 rounded-xl text-sm 
+                         text-red-400 hover:text-red-300 transition-colors"
+            >
+              Reset Defaults
+            </button>
+          </SettingsRow>
+        </SettingsSection>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+# 🎛️ SECTION 4: CUSTOMIZATION ENGINE
+
+---
+
+## 4.1 — Category Manager (Hide, Reorder, Rename Categories)
+
+```typescript
+// src/components/CategoryManager.tsx
+interface CategoryConfig {
+  id: string;
+  originalName: string;
+  customName?: string;
+  visible: boolean;
+  pinned: boolean;
+  order: number;
+  color?: string;   // custom accent color for the category pill
+  icon?: string;    // emoji or icon override
+}
+
+export function CategoryManager({ 
+  categories, 
+  onUpdate 
+}: { 
+  categories: XtreamCategory[];
+  onUpdate: (configs: CategoryConfig[]) => void;
+}) {
+  const [configs, setConfigs] = useState<CategoryConfig[]>(() =>
+    loadCategoryConfigs(categories)
+  );
+  const [filter, setFilter] = useState('');
+  
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+  
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (active.id !== over?.id) {
+      setConfigs(items => {
+        const oldIndex = items.findIndex(i => i.id === active.id);
+        const newIndex = items.findIndex(i => i.id === over?.id);
+        const reordered = arrayMove(items, oldIndex, newIndex);
+        return reordered.map((item, idx) => ({ ...item, order: idx }));
+      });
+    }
+  };
+  
+  const filteredConfigs = configs.filter(c =>
+    (c.customName ?? c.originalName).toLowerCase().includes(filter.toLowerCase())
+  );
+  
+  return (
+    <div className="space-y-4">
+      {/* Filter + bulk actions */}
+      <div className="flex items-center gap-3">
+        <input
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          placeholder="Filter categories..."
+          className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-color)]
+                     rounded-xl px-3 py-2 text-sm focus:outline-none 
+                     focus:border-[var(--accent-primary)] transition-colors"
+        />
+        <button
+          onClick={() => setConfigs(c => c.map(x => ({ ...x, visible: true })))}
+          className="px-3 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-sm transition-colors"
+        >
+          Show All
+        </button>
+        <button
+          onClick={() => setConfigs(c => c.map(x => ({ ...x, visible: false })))}
+          className="px-3 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-sm transition-colors"
+        >
+          Hide All
+        </button>
+      </div>
+      
+      {/* Pinned section */}
+      {configs.filter(c => c.pinned).length > 0 && (
+        <div>
+          <p className="text-xs text-[var(--text-muted)] uppercase tracking-wider mb-2">
+            Pinned (shown first)
+          </p>
+          {/* Render pinned categories */}
+        </div>
+      )}
+      
+      {/* Sortable category list */}
+      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        <SortableContext items={filteredConfigs.map(c => c.id)}>
+          <div className="space-y-1.5 max-h-96 overflow-y-auto 
+                          scrollbar-thin scrollbar-track-transparent 
+                          scrollbar-thumb-white/10">
+            {filteredConfigs.map(config => (
+              <CategoryRow
+                key={config.id}
+                config={config}
+                onToggleVisible={() => {
+                  setConfigs(prev => prev.map(c => 
+                    c.id === config.id ? { ...c, visible: !c.visible } : c
+                  ));
+                }}
+                onTogglePinned={() => {
+                  setConfigs(prev => prev.map(c =>
+                    c.id === config.id ? { ...c, pinned: !c.pinned } : c
+                  ));
+                }}
+                onRename={(name) => {
+                  setConfigs(prev => prev.map(c =>
+                    c.id === config.id ? { ...c, customName: name } : c
+                  ));
+                }}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
+      
+      {/* Save button */}
+      <button
+        onClick={() => {
+          onUpdate(configs);
+          saveCategoryConfigs(configs);
+        }}
+        className="w-full py-2.5 bg-[var(--accent-primary)] text-black 
+                   font-bold rounded-xl hover:brightness-110 transition-all
+                   shadow-[var(--glow-primary)]"
+      >
+        Save Category Layout
+      </button>
+    </div>
+  );
+}
+
+// Individual sortable row:
+function CategoryRow({ config, onToggleVisible, onTogglePinned, onRename }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = 
+    useSortable({ id: config.id });
+  
+  const [editing, setEditing] = useState(false);
+  const [nameInput, setNameInput] = useState(config.customName ?? config.originalName);
+  
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`flex items-center gap-3 p-3 rounded-xl border
+                  transition-all ${
+                    isDragging 
+                      ? 'bg-[var(--accent-primary)]/10 border-[var(--accent-primary)]/50 scale-105 z-50'
+                      : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:border-[var(--accent-primary)]/30'
+                  } ${!config.visible ? 'opacity-40' : ''}`}
+    >
+      {/* Drag handle */}
+      <button {...attributes} {...listeners} className="text-[var(--text-muted)] cursor-grab">
+        <Bars3Icon className="w-4 h-4" />
+      </button>
+      
+      {/* Visibility toggle */}
+      <button onClick={onToggleVisible}>
+        {config.visible 
+          ? <EyeIcon className="w-4 h-4 text-[var(--accent-primary)]" />
+          : <EyeSlashIcon className="w-4 h-4 text-[var(--text-muted)]" />
+        }
+      </button>
+      
+      {/* Category name (editable) */}
+      {editing ? (
+        <input
+          autoFocus
+          value={nameInput}
+          onChange={e => setNameInput(e.target.value)}
+          onBlur={() => { onRename(nameInput); setEditing(false); }}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { onRename(nameInput); setEditing(false); }
+            if (e.key === 'Escape') { setNameInput(config.customName ?? config.originalName); setEditing(false); }
+          }}
+          className="flex-1 bg-transparent text-sm font-medium outline-none
+                     border-b border-[var(--accent-primary)] pb-0.5"
+        />
+      ) : (
+        <span 
+          className="flex-1 text-sm font-medium cursor-pointer hover:text-[var(--accent-primary)] transition-colors"
+          onDoubleClick={() => setEditing(true)}
+        >
+          {config.customName ?? config.originalName}
+          {config.customName && (
+            <span className="text-[var(--text-muted)] text-xs ml-2">
+              (was: {config.originalName})
+            </span>
+          )}
+        </span>
+      )}
+      
+      {/* Pin button */}
+      <button
+        onClick={onTogglePinned}
+        className={`transition-colors ${config.pinned ? 'text-yellow-400' : 'text-[var(--text-muted)] hover:text-white'}`}
+      >
+        <StarIcon className="w-4 h-4" />
+      </button>
+      
+      {/* Edit name button */}
+      <button
+        onClick={() => setEditing(true)}
+        className="text-[var(--text-muted)] hover:text-white transition-colors"
+      >
+        <PencilIcon className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+```
+
+---
+
+## 4.2 — Custom Lists (Create, Edit, Curate Your Own Playlists)
+
+```typescript
+// src/services/customLists.ts
+export interface CustomList {
+  id: string;
+  name: string;
+  icon: string;          // emoji
+  color: string;         // accent color
+  type: 'live' | 'vod' | 'mixed';
+  streamIds: number[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const customListsService = {
+  getLists(): CustomList[] {
+    const raw = localStorage.getItem('custom-lists');
+    return raw ? JSON.parse(raw) : [];
+  },
+  
+  createList(name: string, icon = '📺', color = '#00d4ff', type: CustomList['type'] = 'mixed'): CustomList {
+    const list: CustomList = {
+      id: `list-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      name,
+      icon,
+      color,
+      type,
+      streamIds: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const lists = this.getLists();
+    lists.push(list);
+    localStorage.setItem('custom-lists', JSON.stringify(lists));
+    return list;
+  },
+  
+  addToList(listId: string, streamId: number): void {
+    const lists = this.getLists();
+    const list = lists.find(l => l.id === listId);
+    if (!list) return;
+    if (!list.streamIds.includes(streamId)) {
+      list.streamIds.push(streamId);
+      list.updatedAt = Date.now();
+      localStorage.setItem('custom-lists', JSON.stringify(lists));
+    }
+  },
+  
+  removeFromList(listId: string, streamId: number): void {
+    const lists = this.getLists();
+    const list = lists.find(l => l.id === listId);
+    if (!list) return;
+    list.streamIds = list.streamIds.filter(id => id !== streamId);
+    list.updatedAt = Date.now();
+    localStorage.setItem('custom-lists', JSON.stringify(lists));
+  },
+  
+  deleteList(listId: string): void {
+    const lists = this.getLists().filter(l => l.id !== listId);
+    localStorage.setItem('custom-lists', JSON.stringify(lists));
+  },
+  
+  renameList(listId: string, name: string): void {
+    const lists = this.getLists();
+    const list = lists.find(l => l.id === listId);
+    if (!list) return;
+    list.name = name;
+    list.updatedAt = Date.now();
+    localStorage.setItem('custom-lists', JSON.stringify(lists));
+  },
+  
+  reorderLists(orderedIds: string[]): void {
+    const lists = this.getLists();
+    const reordered = orderedIds
+      .map(id => lists.find(l => l.id === id))
+      .filter(Boolean) as CustomList[];
+    localStorage.setItem('custom-lists', JSON.stringify(reordered));
+  },
+};
+```
+
+**Right-click context menu to add to list (on any channel/movie card):**
+
+```typescript
+// src/components/ContextMenu.tsx
+export function StreamContextMenu({ 
+  stream, 
+  streamType, 
+  position, 
+  onClose 
+}: StreamContextMenuProps) {
+  const lists = customListsService.getLists();
+  const inLists = lists.filter(l => l.streamIds.includes(stream.stream_id));
+  const notInLists = lists.filter(l => !l.streamIds.includes(stream.stream_id));
+  const { favorites, toggleFavorite, isFavorite } = useFavorites();
+  
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      style={{ left: position.x, top: position.y }}
+      className="fixed z-[9999] w-56 bg-[var(--bg-secondary)]/95 backdrop-blur-sm
+                 border border-[var(--border-color)] rounded-2xl shadow-2xl
+                 overflow-hidden py-1"
+    >
+      {/* Stream name header */}
+      <div className="px-3 py-2 border-b border-[var(--border-color)]">
+        <p className="text-sm font-semibold truncate">{stream.name}</p>
+      </div>
+      
+      {/* Favorite */}
+      <ContextMenuItem
+        icon={isFavorite(stream.stream_id) ? <HeartSolidIcon /> : <HeartIcon />}
+        label={isFavorite(stream.stream_id) ? 'Remove from Favorites' : 'Add to Favorites'}
+        onClick={() => { toggleFavorite(stream.stream_id, streamType); onClose(); }}
+        accent={isFavorite(stream.stream_id)}
+      />
+      
+      {/* Add to list submenu */}
+      {notInLists.length > 0 && (
+        <ContextMenuSubmenu label="Add to List" icon={<PlusCircleIcon />}>
+          {notInLists.map(list => (
+            <ContextMenuItem
+              key={list.id}
+              label={`${list.icon} ${list.name}`}
+              onClick={() => {
+                customListsService.addToList(list.id, stream.stream_id);
+                onClose();
+              }}
+            />
+          ))}
+          <ContextMenuDivider />
+          <ContextMenuItem
+            label="Create New List..."
+            icon={<PlusIcon />}
+            onClick={() => { onClose(); showCreateListDialog(stream); }}
+          />
+        </ContextMenuSubmenu>
+      )}
+      
+      {/* Remove from list submenu */}
+      {inLists.length > 0 && (
+        <ContextMenuSubmenu label="Remove from List" icon={<MinusCircleIcon />}>
+          {inLists.map(list => (
+            <ContextMenuItem
+              key={list.id}
+              label={`${list.icon} ${list.name}`}
+              onClick={() => {
+                customListsService.removeFromList(list.id, stream.stream_id);
+                onClose();
+              }}
+            />
+          ))}
+        </ContextMenuSubmenu>
+      )}
+      
+      {streamType === 'live' && (
+        <>
+          <ContextMenuDivider />
+          <ContextMenuItem
+            icon={<VideoCameraIcon />}
+            label="Record Channel"
+            onClick={() => { startDvrRecording(stream); onClose(); }}
+          />
+        </>
+      )}
+      
+      <ContextMenuDivider />
+      <ContextMenuItem
+        icon={<InformationCircleIcon />}
+        label="Stream Info"
+        onClick={() => { showStreamInfo(stream); onClose(); }}
+      />
+    </motion.div>
+  );
+}
+```
+
+---
+
+# 🏆 SECTION 5: FEATURES THAT MAKE YOU #1 (COMPETITIVE ADVANTAGE)
+
+---
+
+## 5.1 — Feature Gap Analysis vs. Top 3 Competitors
+
+| Feature | TiviMate | IPTV Smarters Pro | OTT Navigator | DYLANDOS TARGET |
+|---|---|---|---|---|
+| MPV native playback | ❌ | ❌ | ❌ | ✅ |
+| Hardware decode | ✅ | ✅ | ✅ | ✅ |
+| Neon theme system | ❌ | ❌ | ❌ | ✅ EXCLUSIVE |
+| Custom category lists | ✅ | ❌ | ✅ | ✅ |
+| Fuzzy EPG matching | ❌ | ❌ | ✅ | ✅ |
+| Multi-stream DVR | ✅ | ❌ | ❌ | ✅ 3-slot |
+| Subtitle style editor | ❌ | ❌ | ❌ | ✅ EXCLUSIVE |
+| Screenshot capture | ❌ | ❌ | ❌ | ✅ EXCLUSIVE |
+| Right-click context menu | ❌ | ❌ | ❌ | ✅ EXCLUSIVE |
+| Watch progress sync | ✅ | ❌ | ✅ | ✅ |
+| Provider health monitor | ❌ | ❌ | ❌ | ✅ ADD THIS |
+| Keyboard shortcut sheet | ✅ | ❌ | ❌ | ✅ ADD THIS |
+| Parental controls | ✅ | ✅ | ✅ | ⬜ Future |
+
+---
+
+## 5.2 — Stream Health Monitor (Unique Differentiator)
+
+```typescript
+// src/components/StreamHealthMonitor.tsx
+// This shows in the top-right of the player — real competitive advantage
+
+interface StreamHealth {
+  videoCodec: string;
+  audioCodec: string;
+  resolution: string;
+  fps: number;
+  bitrate: number;      // kbps
+  dropFrames: number;
+  cachePercent: number;
+  latency: number;      // ms
+  reconnectCount: number;
+  quality: 'excellent' | 'good' | 'degraded' | 'poor';
+}
+
+export function StreamHealthIndicator({ state }: { state: MpvState }) {
+  const health = computeStreamHealth(state);
+  
+  const qualityColors = {
+    excellent: '#00ff41',
+    good: '#88ff00',
+    degraded: '#ffaa00',
+    poor: '#ff2d78',
+  };
+  
+  return (
+    <div className="flex items-center gap-1.5">
+      {/* Signal bars */}
+      <div className="flex items-end gap-0.5 h-4">
+        {[1, 2, 3, 4].map(bar => (
+          <div
+            key={bar}
+            className="w-1 rounded-full transition-all duration-500"
+            style={{
+              height: `${bar * 25}%`,
+              backgroundColor: getBarColor(bar, health.quality, qualityColors),
+            }}
+          />
+        ))}
+      </div>
+      
+      {/* Quick stats */}
+      <span className="text-xs font-mono" style={{ color: qualityColors[health.quality] }}>
+        {health.bitrate > 0 ? `${(health.bitrate / 1000).toFixed(1)}Mbps` : '--'}
+      </span>
+      
+      {health.dropFrames > 0 && (
+        <span className="text-xs text-yellow-400 font-mono">
+          {health.dropFrames}df
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Full stats overlay (triggered by clicking the indicator):
+export function StatsOverlay({ state, onClose }: { state: MpvState; onClose: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute top-16 right-4 w-72 
+                 bg-black/90 backdrop-blur rounded-2xl p-4
+                 border border-white/10 font-mono text-xs
+                 space-y-1 text-green-400"
+    >
+      <div className="flex justify-between border-b border-white/10 pb-2 mb-2">
+        <span className="text-white font-bold text-sm">Stream Stats</span>
+        <button onClick={onClose} className="text-gray-500 hover:text-white">✕</button>
+      </div>
+      
+      {[
+        ['Video Codec', state.videoCodec ?? '--'],
+        ['Audio Codec', state.audioCodec ?? '--'],
+        ['Resolution', state.videoWidth ? `${state.videoWidth}×${state.videoHeight}` : '--'],
+        ['Frame Rate', state.fps ? `${state.fps.toFixed(2)}fps` : '--'],
+        ['Bitrate', state.bitrate ? `${Math.round(state.bitrate / 1000)} kbps` : '--'],
+        ['Cache', `${Math.round(state.cachePercent ?? 0)}%`],
+        ['Dropped Frames', String(state.droppedFrames ?? 0)],
+        ['A/V Sync', state.avSync != null ? `${state.avSync.toFixed(3)}s` : '--'],
+      ].map(([label, value]) => (
+        <div key={label} className="flex justify-between">
+          <span className="text-gray-400">{label}:</span>
+          <span className="text-green-300">{value}</span>
+        </div>
+      ))}
+    </motion.div>
+  );
+}
+```
+
+**Add these MPV state properties to `useMpv.ts` polling:**
+
+```typescript
+// In useMpv.ts polling handler, add these properties to your mpv:get-state call:
+// These map to MPV's property observer or are available via get-property:
+
+const POLLED_PROPERTIES = [
+  'time-pos',
+  'duration', 
+  'pause',
+  'volume',
+  'mute',
+  'cache-percent',
+  'video-codec',
+  'audio-codec',
+  'width',
+  'height',
+  'estimated-vf-fps',
+  'video-bitrate',
+  'audio-bitrate',
+  'drop-frame-count',
+  'vo-delayed-frame-count',
+  'avsync',
+  'track-list',
+  'demuxer-cache-state',
+];
+```
+
+---
+
+## 5.3 — Mini Player Mode (No Competitor Has This on Windows)
+
+```typescript
+// src/components/MiniPlayer.tsx
+// A PiP-style mini player that floats in corner while you browse other pages
+
+export function MiniPlayer({ stream, onExpand, onClose }: MiniPlayerProps) {
+  const [pos, setPos] = useState({ x: window.innerWidth - 340, y: window.innerHeight - 220 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStart = useRef<{ x: number; y: number; posX: number; posY: number }>();
+  
+  const handleMouseDown = (e: React.MouseEvent) => {
+    setIsDragging(true);
+    dragStart.current = { x: e.clientX, y: e.clientY, posX: pos.x, posY: pos.y };
+  };
+  
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDragging || !dragStart.current) return;
+    setPos({
+      x: dragStart.current.posX + (e.clientX - dragStart.current.x),
+      y: dragStart.current.posY + (e.clientY - dragStart.current.y),
+    });
+  }, [isDragging]);
+  
+  useEffect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', () => setIsDragging(false));
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, [isDragging]);
+  
+  return (
+    <motion.div
+      initial={{ scale: 0, opacity: 0 }}
+      animate={{ scale: 1, opacity: 1 }}
+      exit={{ scale: 0, opacity: 0 }}
+      style={{ left: pos.x, top: pos.y }}
+      className="fixed z-[9998] w-80 h-48 rounded-2xl overflow-hidden
+                 border border-[var(--border-color)] shadow-2xl cursor-move
+                 group"
+      onMouseDown={handleMouseDown}
+    >
+      {/* The MPV window is behind this — it'll need its position synced */}
+      <div className="absolute inset-0 bg-black" />
+      
+      {/* Hover controls */}
+      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100
+                      transition-opacity flex items-center justify-center gap-3">
+        <button
+          onClick={onExpand}
+          className="p-2 bg-white/20 hover:bg-white/30 rounded-full transition-colors"
+        >
+          <ArrowsPointingOutIcon className="w-5 h-5 text-white" />
+        </button>
+        <button
+          onClick={onClose}
+          className="p-2 bg-white/20 hover:bg-white/30 rounded-full transition-colors"
+        >
+          <XMarkIcon className="w-5 h-5 text-white" />
+        </button>
+      </div>
+      
+      {/* Channel info */}
+      <div className="absolute bottom-0 left-0 right-0 px-3 py-2
+                      bg-gradient-to-t from-black to-transparent
+                      opacity-0 group-hover:opacity-100 transition-opacity">
+        <p className="text-white text-xs font-medium truncate">{stream.name}</p>
+      </div>
+    </motion.div>
+  );
+}
+```
+
+---
+
+## 5.4 — Keyboard Shortcut Map (Power User Feature)
+
+```typescript
+// src/hooks/useKeyboardShortcuts.ts
+export function useKeyboardShortcuts(mpv: UseMpvReturn, isPlayerActive: boolean) {
+  
+  useEffect(() => {
+    if (!isPlayerActive) return;
+    
+    const handler = (e: KeyboardEvent) => {
+      // Don't fire if user is typing in an input:
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      
+      const shortcuts: Record<string, () => void> = {
+        ' ':           mpv.togglePlayPause,
+        'k':           mpv.togglePlayPause,
+        'ArrowLeft':   () => mpv.seekRelative(-5),
+        'ArrowRight':  () => mpv.seekRelative(5),
+        'j':           () => mpv.seekRelative(-10),
+        'l':           () => mpv.seekRelative(10),
+        'ArrowUp':     () => mpv.setVolume(Math.min(100, (mpv.state.volume ?? 80) + 5)),
+        'ArrowDown':   () => mpv.setVolume(Math.max(0, (mpv.state.volume ?? 80) - 5)),
+        'm':           () => mpv.setMute(!mpv.state.muted),
+        'f':           () => mpv.setFullscreen(!mpv.state.fullscreen),
+        's':           mpv.takeScreenshot,
+        'c':           () => toggleCaptions(),   // cycle subtitle tracks
+        'a':           () => cycleAudioTrack(),  // cycle audio tracks
+        '[':           () => mpv.setAudioDelay((mpv.state.audioDelay ?? 0) - 0.1),
+        ']':           () => mpv.setAudioDelay((mpv.state.audioDelay ?? 0) + 0.1),
+        'Escape':      () => exitPlayer(),
+        '?':           () => setShowShortcutHelp(true),
+      };
+      
+      const action = shortcuts[e.key];
+      if (action) {
+        e.preventDefault();
+        action();
+      }
+    };
+    
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [mpv, isPlayerActive]);
+}
+
+// Keyboard shortcut help overlay:
+export function KeyboardShortcutHelp({ onClose }: { onClose: () => void }) {
+  const shortcuts = [
+    { key: 'Space / K', action: 'Play / Pause' },
+    { key: '← / →', action: 'Seek ±5 seconds' },
+    { key: 'J / L', action: 'Seek ±10 seconds' },
+    { key: '↑ / ↓', action: 'Volume ±5%' },
+    { key: 'M', action: 'Toggle Mute' },
+    { key: 'F', action: 'Toggle Fullscreen' },
+    { key: 'S', action: 'Take Screenshot' },
+    { key: 'C', action: 'Cycle Subtitles' },
+    { key: 'A', action: 'Cycle Audio Tracks' },
+    { key: '[ / ]', action: 'Audio Delay ±100ms' },
+    { key: 'Escape', action: 'Exit Player' },
+    { key: '?', action: 'This help screen' },
+  ];
+  
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center"
+      onClick={onClose}
+    >
+      <div 
+        className="bg-[var(--bg-secondary)] border border-[var(--border-color)]
+                   rounded-3xl p-8 w-96 shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <h2 className="text-xl font-bold mb-6 text-[var(--accent-primary)]"
+            style={{ textShadow: 'var(--glow-primary)' }}>
+          Keyboard Shortcuts
+        </h2>
+        <div className="space-y-2">
+          {shortcuts.map(({ key, action }) => (
+            <div key={key} className="flex justify-between items-center">
+              <span className="text-[var(--text-secondary)] text-sm">{action}</span>
+              <kbd className="bg-[var(--bg-tertiary)] border border-[var(--border-color)]
+                             px-2 py-0.5 rounded-lg text-xs font-mono text-[var(--accent-primary)]">
+                {key}
+              </kbd>
+            </div>
+          ))}
+        </div>
+        <button
+          onClick={onClose}
+          className="mt-6 w-full py-2 bg-[var(--accent-primary)] text-black 
+                     font-bold rounded-xl transition-all hover:brightness-110"
+        >
+          Got it
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+```
+
+---
+
+# 🚀 SECTION 6: HOME SCREEN ELEVATION
+
+---
+
+## 6.1 — Premium Home Screen Layout
+
+```typescript
+// src/pages/HomePage.tsx — premium redesign
+
+export function HomePage({ channels, movies, series, epg, recentlyWatched }: HomePageProps) {
+  
+  return (
+    <div className="min-h-screen" style={{ background: 'var(--gradient-hero)' }}>
+      
+      {/* HERO SECTION — Featured content with animated background */}
+      <HeroFeatured content={getFeaturedContent(channels, movies)} epg={epg} />
+      
+      {/* CONTINUE WATCHING — Most important row */}
+      {recentlyWatched.length > 0 && (
+        <ContentRow
+          title="Continue Watching"
+          icon="▶"
+          items={recentlyWatched}
+          variant="progress"  // shows progress bar on each card
+          priority
+        />
+      )}
+      
+      {/* LIVE NOW — Channels currently broadcasting something with EPG match */}
+      <LiveNowRow channels={channels} epg={epg} />
+      
+      {/* TODAY'S SCHEDULE — Timeline view of what's on */}
+      <TodayScheduleRow channels={channels} epg={epg} />
+      
+      {/* TRENDING MOVIES */}
+      <ContentRow
+        title="Popular Movies"
+        icon="🎬"
+        items={getTrendingMovies(movies)}
+        variant="poster"
+      />
+      
+      {/* NEW SERIES */}
+      <ContentRow
+        title="Series"
+        icon="📺"
+        items={getRecentSeries(series)}
+        variant="poster"
+      />
+      
+      {/* QUICK FAVS */}
+      <FavoritesRow />
+      
+    </div>
+  );
+}
+
+// HERO component — animated gradient background with featured content:
+function HeroFeatured({ content, epg }: { content: FeaturedContent; epg: EpgData }) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const featured = content[currentIndex];
+  
+  // Auto-rotate every 8 seconds:
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentIndex(i => (i + 1) % content.length);
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [content.length]);
+  
+  return (
+    <div className="relative h-[60vh] overflow-hidden">
+      {/* Backdrop image with blur */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={currentIndex}
+          initial={{ opacity: 0, scale: 1.05 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.8 }}
+          className="absolute inset-0"
+        >
+          {featured.backdropUrl && (
+            <img
+              src={featured.backdropUrl}
+              className="w-full h-full object-cover"
+              style={{ filter: 'brightness(0.35) saturate(1.4)' }}
+            />
+          )}
+          
+          {/* Neon theme overlay */}
+          <div 
+            className="absolute inset-0"
+            style={{
+              background: `linear-gradient(135deg, var(--bg-primary) 0%, transparent 40%, transparent 60%, var(--bg-primary) 100%), 
+                           linear-gradient(to top, var(--bg-primary) 0%, transparent 40%)`,
+            }}
+          />
+          
+          {/* Animated accent glow from bottom */}
+          <div 
+            className="absolute bottom-0 left-0 right-0 h-48 opacity-30"
+            style={{
+              background: `radial-gradient(ellipse at 50% 100%, var(--accent-primary) 0%, transparent 70%)`,
+            }}
+          />
+        </motion.div>
+      </AnimatePresence>
+      
+      {/* Content info */}
+      <div className="absolute bottom-0 left-0 right-0 p-10 z-10">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={`info-${currentIndex}`}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+          >
+            {featured.type === 'live' && featured.epgNow && (
+              <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 
+                               bg-red-500 rounded-full">
+                  <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
+                  <span className="text-white text-xs font-bold">LIVE</span>
+                </div>
+                <span className="text-[var(--text-secondary)] text-sm">
+                  {featured.epgNow.title}
+                </span>
+              </div>
+            )}
+            
+            <h1 
+              className="text-5xl font-black tracking-tight mb-3"
+              style={{ 
+                color: 'var(--text-primary)',
+                textShadow: '0 2px 20px rgba(0,0,0,0.8)'
+              }}
+            >
+              {featured.name}
+            </h1>
+            
+            {featured.description && (
+              <p className="text-[var(--text-secondary)] text-base max-w-lg line-clamp-2 mb-5">
+                {featured.description}
+              </p>
+            )}
+            
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => playContent(featured)}
+                className="flex items-center gap-2 px-7 py-3 rounded-xl
+                           font-bold text-base transition-all duration-200
+                           hover:scale-105 active:scale-95"
+                style={{ 
+                  backgroundColor: 'var(--accent-primary)',
+                  color: 'black',
+                  boxShadow: 'var(--glow-primary)'
+                }}
+              >
+                <PlayIcon className="w-5 h-5" />
+                Watch Now
+              </button>
+              
+              <button
+                className="flex items-center gap-2 px-7 py-3 rounded-xl
+                           font-bold text-base bg-white/10 hover:bg-white/20
+                           backdrop-blur transition-all duration-200 text-white"
+              >
+                <InformationCircleIcon className="w-5 h-5" />
+                More Info
+              </button>
+            </div>
+          </motion.div>
+        </AnimatePresence>
+      </div>
+      
+      {/* Dot indicators */}
+      <div className="absolute bottom-4 right-10 flex gap-1.5 z-10">
+        {content.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => setCurrentIndex(i)}
+            className={`rounded-full transition-all duration-300 ${
+              i === currentIndex 
+                ? 'w-6 h-2 bg-[var(--accent-primary)]' 
+                : 'w-2 h-2 bg-white/30 hover:bg-white/60'
+            }`}
+            style={i === currentIndex ? { boxShadow: 'var(--glow-primary)' } : {}}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+# 🔧 SECTION 7: CRITICAL TYPES & SETTINGS UPDATES
+
+---
+
+## 7.1 — Updated `src/types/settings.ts`
+
+```typescript
+export interface Settings {
+  // ── Playback ──
+  preferredEngine: 'mpv' | 'hls';
+  hwDecoding: 'auto-safe' | 'auto' | 'd3d11va' | 'dxva2' | 'no';
+  mpvLiveBufferPreset: 'low' | 'medium' | 'high';
+  mpvExtraArgs: string;
+  audioDelay: number;
+  defaultVolume: number;
+  rememberVolume: boolean;
+  autoResume: boolean;
+  screenshotDir: string;
+  
+  // ── EPG ──
+  epgEnabled: boolean;
+  epgRefreshHours: number;
+  epgDays: number;
+  epgMatchMode: 'exact' | 'fuzzy' | 'name';
+  epgSources: string[];
+  
+  // ── DVR ──
+  dvrOutputDir: string;
+  dvrFormat: 'ts' | 'mkv' | 'mp4';
+  dvrMaxConcurrent: 1 | 2 | 3;
+  dvrAutoDelete: boolean;
+  dvrAutoDeleteDays: number;
+  
+  // ── Subtitles ──
+  subtitleLanguage: string;
+  subtitleSize: number;
+  subtitleColor: string;
+  subtitleBold: boolean;
+  subtitleBorderStyle: 'outline' | 'box' | 'none';
+  
+  // ── Network ──
+  connectionTimeout: number;
+  userAgent: string;
+  maxReconnectAttempts: number;
+  
+  // ── Appearance ──
+  theme: 'cyberpunk' | 'matrix' | 'nova';
+  
+  // ── Advanced ──
+  debugLogging: boolean;
+  
+  // ── Internal ──
+  _version: number;
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  preferredEngine: 'mpv',
+  hwDecoding: 'auto-safe',          // ← CHANGED from 'auto'
+  mpvLiveBufferPreset: 'medium',
+  mpvExtraArgs: '',
+  audioDelay: 0,
+  defaultVolume: 80,
+  rememberVolume: true,
+  autoResume: true,
+  screenshotDir: '',
+  
+  epgEnabled: true,
+  epgRefreshHours: 6,
+  epgDays: 3,
+  epgMatchMode: 'fuzzy',            // ← NEW
+  epgSources: [],
+  
+  dvrOutputDir: '',
+  dvrFormat: 'ts',
+  dvrMaxConcurrent: 3,
+  dvrAutoDelete: false,
+  dvrAutoDeleteDays: 30,
+  
+  subtitleLanguage: 'eng',
+  subtitleSize: 100,
+  subtitleColor: '#ffffff',
+  subtitleBold: false,
+  subtitleBorderStyle: 'outline',
+  
+  connectionTimeout: 10,
+  userAgent: 'IPTVSmartersPro',
+  maxReconnectAttempts: 5,
+  
+  theme: 'cyberpunk',               // ← NEW
+  
+  debugLogging: false,
+  
+  _version: 2,
+};
+```
+
+---
+
+# 📋 SECTION 8: MASTER IMPLEMENTATION ORDER
+
+---
+
+## Priority Queue — Exact Order to Implement
+
+```
+PHASE 1 — GET IT WORKING (Do this weekend)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[ ] 1. Fix hwDec → change default to 'auto-safe' in settings.ts + mpvManager.cjs
+[ ] 2. Add --vo=gpu-next --gpu-api=d3d11 to MPV startup args
+[ ] 3. Add stream-lavf-o reconnect flags to loadLiveStream
+[ ] 4. Add MPV idle readiness gate before sending loadfile
+[ ] 5. Verify VOD URL construction in xtreamApi.ts (add .mp4 extension)
+[ ] 6. Verify VideoPlayerEngine.tsx routes live vs VOD correctly
+[ ] 7. Add console.log to loadLiveStream showing full URL + settings
+[ ] 8. Add EPG fuzzy matching to xmltvEpg.ts
+[ ] 9. Add EPG diagnose function and run it on load
+
+PHASE 2 — MAKE IT BEAUTIFUL (This week)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[ ] 10. Implement themes.ts with 3 neon themes
+[ ] 11. Implement useTheme hook + CSS custom properties
+[ ] 12. Update tailwind.config.ts with theme color tokens
+[ ] 13. Apply theme tokens across all existing components
+[ ] 14. Build ThemePicker component for settings
+[ ] 15. Redesign HomePage with HeroFeatured + content rows
+[ ] 16. Add framer-motion for page transitions (npm install framer-motion)
+
+PHASE 3 — PLAYER CONTROLS (Next week)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[ ] 17. Build full PlayerControls OSD in MpvPlayer.tsx
+[ ] 18. Build SubtitleSettingsPanel
+[ ] 19. Build StatsOverlay + StreamHealthIndicator
+[ ] 20. Add additional MPV properties to useMpv.ts polling
+[ ] 21. Implement keyboard shortcuts hook
+[ ] 22. Build KeyboardShortcutHelp modal
+[ ] 23. Add SeekBar component with buffer indicator for VOD
+[ ] 24. Add VolumeControl with scroll wheel support
+
+PHASE 4 — DVR + SETTINGS (Week 2)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[ ] 25. Upgrade dvr:start handler for 3-slot concurrent tracking
+[ ] 26. Build DvrStatusBar floating component
+[ ] 27. Build full SettingsPage with save button
+[ ] 28. Add all new settings fields to Settings type + defaults
+[ ] 29. Wire settings:sync to main process for MPV settings
+
+PHASE 5 — CUSTOMIZATION + POLISH (Week 3)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[ ] 30. Build CategoryManager with drag-drop reorder
+[ ] 31. Build customListsService
+[ ] 32. Build ContextMenu (right-click on channels/movies)
+[ ] 33. Build MiniPlayer floating component
+[ ] 34. Add autoplay next episode for series
+[ ] 35. Add watch progress indicator on content cards
+
+PHASE 6 — SHIP (Week 4)
+━━━━━━━━━━━━━━━━━━━━━━━━
+[ ] 36. Run npm run electron:build:safe
+[ ] 37. Test all 3 themes on clean Windows VM
+[ ] 38. Test DVR 3-slot concurrent recording
+[ ] 39. Test VOD resume position persistence
+[ ] 40. Verify EPG matching works with real provider
+[ ] 41. Final installer test
+```
+
+---
+
+## Key NPM Packages to Add
+
+```bash
+npm install framer-motion        # Smooth animations (ESSENTIAL for top-1 UI)
+npm install @dnd-kit/core        # Drag-and-drop for category manager
+npm install @dnd-kit/sortable    # Sortable lists
+npm install @dnd-kit/utilities   # DnD helpers
+npm install react-intersection-observer  # Lazy loading for huge channel lists
+npm install date-fns             # EPG time formatting (lightweight)
+npm install fuse.js              # Fuzzy search across channels/movies
+```
+
+---
+
+## Top 5 Vibe Coding Tricks for This Stack
+
+1. **Never fight Tailwind + CSS vars** — Define all your neon theme colors as CSS custom properties (as shown above), then reference them in Tailwind via the `extend` config. This gives you hot-reload-safe theming with zero runtime JS overhead.
+
+2. **MPV is a black box — log everything** — Add timestamps to every MPV IPC message in development. The race between "MPV spawned" and "MPV IPC pipe ready" is your #1 source of mysterious live TV failures. A readiness gate (Section 1.1 Culprit D) eliminates an entire class of bugs.
+
+3. **Virtualize everything** — Your `VirtualContentGrid.tsx` is already there. Make sure every list over 50 items goes through it. Channel lists of 10,000+ items will freeze React without virtualization. Use `react-window` or `@tanstack/react-virtual` for both grids and EPG guide timelines.
+
+4. **Background sync pattern** — For EPG, TMDB, and category loading, always: (a) show cached data immediately, (b) kick off a background refresh, (c) merge new data into state without a loading spinner. This makes the app feel instantaneous even on slow providers.
+
+5. **The MPV backing window trick is your superpower** — None of your competitors have native MPV embedded in a beautiful React UI. Lean into this. The stats overlay, subtitle style editor, screenshot with neon flash effect — all of these are things that are simply impossible with a `<video>` tag. Make them prominent in your UI so users know immediately this is a different class of player.

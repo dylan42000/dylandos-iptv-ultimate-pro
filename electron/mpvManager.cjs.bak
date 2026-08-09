@@ -1,0 +1,521 @@
+// ─── DYLANDOS IPTV ULTIMATE — MPV Manager ─────────────────────────────────────
+// Manages MPV subprocess lifecycle, IPC communication, and state reporting.
+// Uses node-mpv for IPC and ships mpv.exe as an extraResource.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const path = require('path');
+const { app } = require('electron');
+const fsSync = require('fs');
+
+// ─── MPV binary resolution ────────────────────────────────────────────────────
+function getMpvBinaryPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'mpv', 'mpv.exe');
+  }
+  return path.join(__dirname, '..', 'vendor', 'mpv', 'mpv.exe');
+}
+
+// ─── IPC socket path ─────────────────────────────────────────────────────────
+const MPV_IPC_PIPE =
+  process.platform === 'win32'
+    ? '\\\\.\\pipe\\dylandos-mpv-ipc'
+    : '/tmp/dylandos-mpv.sock';
+
+// ─── Helper: convert hex colour → MPV RGBA string ────────────────────────────
+function hexToMpvColor(hex) {
+  const clean = hex.replace('#', '');
+  const r = parseInt(clean.slice(0, 2), 16) / 255;
+  const g = parseInt(clean.slice(2, 4), 16) / 255;
+  const b = parseInt(clean.slice(4, 6), 16) / 255;
+  return `${r.toFixed(3)}/${g.toFixed(3)}/${b.toFixed(3)}/1.0`;
+}
+
+// ─── MPV Manager ──────────────────────────────────────────────────────────────
+class MpvManager {
+  constructor() {
+    this.mpv = null;
+    this.win = null;
+    this.currentStreamUrl = null;
+    this.currentStreamType = null; // 'live' | 'vod'
+    this.isInitialized = false;
+    this.statusInterval = null;
+    this.reconnectTimer = null;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 10;
+    this.baseReconnectDelayMs = 2000;
+    this.settings = {};
+    this._mpvStarted = false;
+  }
+
+  // ─── Initialize ─────────────────────────────────────────────────────────────
+  async initialize(browserWindow, settings) {
+    this.win = browserWindow;
+    this.settings = settings;
+
+    let mpvAPI;
+    try {
+      mpvAPI = require('node-mpv');
+    } catch (err) {
+      console.error('[MPV] node-mpv not installed:', err.message);
+      this._sendToRenderer('mpv:unavailable', {
+        reason: 'node-mpv package not installed. Run: npm install node-mpv',
+      });
+      return;
+    }
+
+    const mpvBinary = getMpvBinaryPath();
+
+    const sharedArgs = [
+      '--no-terminal',
+      '--idle=yes',
+      '--no-osc',
+      '--no-input-default-bindings',
+      '--input-ipc-server=' + MPV_IPC_PIPE,
+      '--hr-seek=yes',
+      '--keep-open=yes',
+      '--screenshot-format=png',
+      '--screenshot-directory=' + app.getPath('pictures'),
+      '--msg-level=all=error',
+      // ─── Network hardening (critical for IPTV self-signed TLS servers) ───
+      '--tls-verify=no',
+      '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      '--referrer=',
+      '--network-timeout=15',
+      '--force-window=yes',         // Keep MPV window alive between streams
+      '--focus-on=never',           // Prevent focus-steal from the Electron OSD window
+    ];
+
+    // NOTE: instrumentation and log-file support were removed to keep
+    // the normal runtime quiet unless explicitly re-added. MPV will be
+    // started lazily when the first stream is loaded so it does not
+    // create a window/process at app startup.
+
+    this.mpv = new mpvAPI(
+      {
+        binary: mpvBinary,
+        socket: MPV_IPC_PIPE,
+        time_update: 1,
+        verbose: false,
+        debug: false,
+        auto_restart: true,
+      },
+      sharedArgs
+    );
+
+    await this._attachEventListeners();
+
+    // Do not start MPV automatically on initialize; start lazily when
+    // first stream is requested to avoid creating a window/process at app
+    // startup.
+    this.isInitialized = true;
+    this._sendToRenderer('mpv:ready', { initialized: true });
+    console.log('[MPV] Manager initialized (MPV not started until first stream)');
+  }
+
+  async _ensureStarted() {
+    if (this._mpvStarted) return;
+    try {
+      await this.mpv.start();
+      this._mpvStarted = true;
+      console.log('[MPV] Process started');
+    } catch (err) {
+      console.error('[MPV] Failed to start:', err?.message || err);
+      this._sendToRenderer('mpv:unavailable', { reason: err?.message || String(err) });
+      throw err;
+    }
+  }
+
+  // ─── Event Listeners ────────────────────────────────────────────────────────
+  async _attachEventListeners() {
+    this.mpv.on('started', () => {
+      this._sendToRenderer('mpv:playback-started', {
+        url: this.currentStreamUrl,
+        type: this.currentStreamType,
+      });
+      this.reconnectAttempts = 0;
+      this._startStatusPolling();
+    });
+
+    this.mpv.on('stopped', () => {
+      this._stopStatusPolling();
+      if (this.currentStreamType === 'live') {
+        this._handleLiveStreamEnd();
+      } else {
+        this._sendToRenderer('mpv:vod-ended', {});
+      }
+    });
+
+    this.mpv.on('paused', () => {
+      this._sendToRenderer('mpv:paused', {});
+    });
+
+    this.mpv.on('resumed', () => {
+      this._sendToRenderer('mpv:resumed', {});
+    });
+
+    this.mpv.on('timeposition', (seconds) => {
+      this._sendToRenderer('mpv:timeposition', { seconds });
+    });
+
+    this.mpv.on('crashed', () => {
+      console.error('[MPV] Process crashed — auto_restart will handle it');
+      this._sendToRenderer('mpv:crashed', {});
+      if (this.currentStreamUrl) {
+        setTimeout(() => this._reloadCurrentStream(), 1500);
+      }
+    });
+
+    // Property observers — IDs 50+ are safe (0-12 reserved by node-mpv)
+    const observers = [
+      ['cache-buffering-state', 50],
+      ['paused-for-cache', 51],
+      ['video-bitrate', 52],
+      ['audio-bitrate', 53],
+      ['video-codec', 54],
+      ['audio-codec', 55],
+      ['hwdec-current', 56],
+      ['track-list', 57],
+    ];
+    for (const [prop, id] of observers) {
+      try {
+        await this.mpv.observeProperty(prop, id);
+      } catch {
+        // Non-fatal if a property isn't available yet
+      }
+    }
+
+    this.mpv.on('statuschange', (status) => {
+      this._sendToRenderer('mpv:status', {
+        bufferingPercent: status['cache-buffering-state'] ?? 0,
+        pausedForCache: status['paused-for-cache'] ?? false,
+        videoBitrate: status['video-bitrate'] ?? 0,
+        audioBitrate: status['audio-bitrate'] ?? 0,
+        videoCodec: status['video-codec'] ?? '',
+        audioCodec: status['audio-codec'] ?? '',
+        hwdecActive: status['hwdec-current'] ?? 'no',
+        trackList: status['track-list'] ?? [],
+        duration: status.duration ?? 0,
+        position: status.position ?? 0,
+        pause: status.pause ?? false,
+        volume: status.volume ?? 100,
+        mute: status.mute ?? false,
+      });
+    });
+  }
+
+  // ─── Load Live TV Stream ────────────────────────────────────────────────────
+  async loadLiveStream(url, settings = {}) {
+    if (!this.isInitialized) {
+      throw new Error('[MPV] Not initialized — call initialize() first');
+    }
+
+    // Ensure MPV process is started before attempting to load a stream
+    try { await this._ensureStarted(); } catch { return; }
+
+    this._clearReconnectTimer();
+    this.currentStreamUrl = url;
+    this.currentStreamType = 'live';
+
+    await this._applyLiveProfile({ ...this.settings, ...settings });
+
+    try {
+      await this.mpv.load(url, 'replace');
+      this._sendToRenderer('mpv:loading', { url, type: 'live' });
+    } catch (err) {
+      console.error('[MPV] Failed to load live stream:', err);
+      this._sendToRenderer('mpv:error', { message: err.message, type: 'live' });
+      await this._handleLiveStreamEnd();
+    }
+  }
+
+  // ─── Load VOD Stream ────────────────────────────────────────────────────────
+  async loadVodStream(url, startPositionSeconds = 0, settings = {}) {
+    if (!this.isInitialized) {
+      throw new Error('[MPV] Not initialized');
+    }
+
+    // Ensure MPV process is started before attempting to load a stream
+    try { await this._ensureStarted(); } catch { return; }
+
+    this._clearReconnectTimer();
+    this.currentStreamUrl = url;
+    this.currentStreamType = 'vod';
+
+    await this._applyVodProfile({ ...this.settings, ...settings });
+
+    const loadOptions =
+      startPositionSeconds > 0 ? { start: `+${startPositionSeconds}` } : {};
+
+    try {
+      await this.mpv.load(url, 'replace', loadOptions);
+      this._sendToRenderer('mpv:loading', {
+        url,
+        type: 'vod',
+        startPosition: startPositionSeconds,
+      });
+    } catch (err) {
+      console.error('[MPV] Failed to load VOD stream:', err);
+      this._sendToRenderer('mpv:error', { message: err.message, type: 'vod' });
+    }
+  }
+
+  // ─── Live Reconnect Logic ───────────────────────────────────────────────────
+  async _handleLiveStreamEnd() {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this._sendToRenderer('mpv:error', {
+        message: `Reconnect failed after ${this.maxReconnectAttempts} attempts`,
+        type: 'live',
+        fatal: true,
+      });
+      this.reconnectAttempts = 0;
+      return;
+    }
+
+    this.reconnectAttempts++;
+    const delay = Math.min(
+      this.baseReconnectDelayMs * Math.pow(2, this.reconnectAttempts - 1),
+      30000
+    );
+
+    this._sendToRenderer('mpv:reconnecting', {
+      attempt: this.reconnectAttempts,
+      maxAttempts: this.maxReconnectAttempts,
+      delayMs: delay,
+    });
+
+    console.log(
+      `[MPV] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`
+    );
+
+    this.reconnectTimer = setTimeout(async () => {
+      if (this.currentStreamUrl && this.currentStreamType === 'live') {
+        try {
+          await this.mpv.load(this.currentStreamUrl, 'replace');
+        } catch {
+          await this._handleLiveStreamEnd();
+        }
+      }
+    }, delay);
+  }
+
+  async _reloadCurrentStream() {
+    if (!this.currentStreamUrl) return;
+    if (this.currentStreamType === 'live') {
+      await this.loadLiveStream(this.currentStreamUrl, this.settings);
+    } else {
+      await this.loadVodStream(this.currentStreamUrl, 0, this.settings);
+    }
+  }
+
+  // ─── Live TV Profile ────────────────────────────────────────────────────────
+  async _applyLiveProfile(settings) {
+    const bufferPreset = settings.liveBufferPreset ?? 'medium';
+    const bufferMap = {
+      low:    { cacheSecs: 10,  demuxerMaxBytes: '64MiB',  demuxerBackBytes: '32MiB',  readaheadSecs: 10  },
+      medium: { cacheSecs: 20,  demuxerMaxBytes: '128MiB', demuxerBackBytes: '48MiB',  readaheadSecs: 20  },
+      high:   { cacheSecs: 60,  demuxerMaxBytes: '512MiB', demuxerBackBytes: '128MiB', readaheadSecs: 60  },
+    };
+    const buf = bufferMap[bufferPreset] ?? bufferMap.medium;
+
+    const hwdecMode = settings.mpvHwdecMode ?? (settings.hardwareDecode ? 'auto-safe' : 'no');
+    const scaler    = settings.mpvScaler ?? 'lanczos';
+    const amplify   = settings.mpvVoiceAmplify ?? 1.0;
+
+    try {
+      await this.mpv.setMultipleProperties({
+        'profile':                'low-latency',
+        'fullscreen':             'yes',          // MPV renders full-screen behind the Electron OSD overlay
+        'cache':                  'yes',
+        'cache-secs':             buf.cacheSecs,
+        'cache-pause':            'no',
+        'demuxer-max-bytes':      buf.demuxerMaxBytes,
+        'demuxer-max-back-bytes': buf.demuxerBackBytes,
+        'demuxer-readahead-secs': buf.readaheadSecs,
+        'stream-buffer-size':     '12MiB',
+        'hwdec':                  hwdecMode,
+        'network-timeout':        30,
+        'video-latency-hacks':    'yes',
+        'hr-seek':                'no',
+        'video-sync':             'audio',
+        'framedrop':              'vo',
+        'audio-delay':            (settings.audioOffsetMs ?? 0) / 1000,
+        'sub-visibility':         'yes',
+        'scale':                  scaler,
+        'cscale':                 'bicubic',
+        'deinterlace':            settings.mpvDeinterlace ? 'yes' : 'no',
+        'af':                     amplify > 1.0 ? `@volume:volume=${amplify}` : 'no',
+      });
+    } catch (err) {
+      console.warn('[MPV] _applyLiveProfile partial failure:', err.message);
+    }
+  }
+
+  // ─── VOD Profile ────────────────────────────────────────────────────────────
+  async _applyVodProfile(settings) {
+    const hwdecMode = settings.mpvHwdecMode ?? (settings.hardwareDecode ? 'auto-safe' : 'no');
+    const scaler    = settings.mpvScaler ?? 'lanczos';
+    const amplify   = settings.mpvVoiceAmplify ?? 1.0;
+
+    try {
+      await this.mpv.setMultipleProperties({
+        'profile':                'high-quality',
+        'cache':                  'yes',
+        'cache-secs':             120,
+        'demuxer-max-bytes':      '200MiB',
+        'demuxer-readahead-secs': 60,
+        'hwdec':                  hwdecMode,
+        'hr-seek':                'yes',
+        'hr-seek-framedrop':      'yes',
+        'video-sync':             'display-resample',
+        'framedrop':              'vo',
+        'audio-delay':            (settings.audioOffsetMs ?? 0) / 1000,
+        'sub-visibility':         'yes',
+        'sub-ass-override':       'force',
+        'sub-font-size':          settings.subtitleFontSize ?? 24,
+        'scale':                  scaler,
+        'cscale':                 'bicubic',
+        'deinterlace':            settings.mpvDeinterlace ? 'yes' : 'no',
+        'af':                     amplify > 1.0 ? `@volume:volume=${amplify}` : 'no',
+      });
+    } catch (err) {
+      console.warn('[MPV] _applyVodProfile partial failure:', err.message);
+    }
+  }
+
+  // ─── Playback Controls ─────────────────────────────────────────────────────
+  async play()           { await this.mpv.play(); }
+  async pause()          { await this.mpv.pause(); }
+  async togglePlayPause(){ await this.mpv.togglePause(); }
+
+  async stop() {
+    this._clearReconnectTimer();
+    this.currentStreamUrl = null;
+    this.currentStreamType = null;
+    try { await this.mpv.stop(); } catch {}
+    this._sendToRenderer('mpv:stopped', {});
+  }
+
+  async seek(seconds) {
+    if (this.currentStreamType === 'vod') {
+      await this.mpv.goToPosition(seconds);
+    }
+  }
+
+  async seekRelative(deltaSeconds) {
+    if (this.currentStreamType === 'vod') {
+      await this.mpv.seek(deltaSeconds);
+    }
+  }
+
+  async setVolume(level) {
+    // level is 0–1 from renderer, MPV expects 0–100
+    // Sanitize: guard against NaN/Infinity from corrupted localStorage
+    const safe = (level !== undefined && isFinite(Number(level)))
+      ? Math.min(1.0, Math.max(0.0, Number(level)))
+      : 1.0;
+    await this.mpv.volume(Math.round(safe * 100));
+  }
+
+  async setMute(muted) {
+    await this.mpv.mute(muted);
+  }
+
+  async setFullscreen(enabled) {
+    await this.mpv.setProperty('fullscreen', enabled);
+  }
+
+  // ─── Track Selection ────────────────────────────────────────────────────────
+  async setAudioTrack(trackId)    { await this.mpv.setProperty('aid', trackId); }
+  async setSubtitleTrack(trackId) { await this.mpv.setProperty('sid', trackId); }
+  async setVideoTrack(trackId)    { await this.mpv.setProperty('vid', trackId); }
+
+  // ─── Audio Offset / Lip-Sync ────────────────────────────────────────────────
+  async setAudioOffsetMs(offsetMs) {
+    await this.mpv.setProperty('audio-delay', offsetMs / 1000);
+  }
+
+  // ─── Subtitle Styling ──────────────────────────────────────────────────────
+  async applySubtitleSettings(subtitleSettings) {
+    try {
+      await this.mpv.setMultipleProperties({
+        'sub-font-size':   subtitleSettings.subtitleFontSize ?? 24,
+        'sub-color':       hexToMpvColor(subtitleSettings.subtitleFontColor ?? '#FFFFFF'),
+        'sub-border-size': subtitleSettings.subtitleOutlineWidth ?? 2,
+        'sub-back-color':  `0.0/0.0/0.0/${subtitleSettings.subtitleBackgroundOpacity ?? 0.6}`,
+        'sub-shadow-offset': 2,
+      });
+    } catch (err) {
+      console.warn('[MPV] applySubtitleSettings failed:', err.message);
+    }
+  }
+
+  // ─── Screenshot ─────────────────────────────────────────────────────────────
+  async takeScreenshot() {
+    try {
+      await this.mpv.command('screenshot', ['video']);
+      this._sendToRenderer('mpv:screenshot-taken', {
+        path: app.getPath('pictures'),
+      });
+    } catch (err) {
+      console.error('[MPV] Screenshot failed:', err.message);
+    }
+  }
+
+  // ─── Get Current Playback State ─────────────────────────────────────────────
+  async getPlaybackState() {
+    try {
+      const [position, duration, pause, volume, mute] = await Promise.all([
+        this.mpv.getProperty('time-pos').catch(() => 0),
+        this.mpv.getProperty('duration').catch(() => 0),
+        this.mpv.getProperty('pause').catch(() => false),
+        this.mpv.getProperty('volume').catch(() => 100),
+        this.mpv.getProperty('mute').catch(() => false),
+      ]);
+      return { position, duration, pause, volume: volume / 100, mute };
+    } catch {
+      return { position: 0, duration: 0, pause: false, volume: 1, mute: false };
+    }
+  }
+
+  // ─── Status Polling ─────────────────────────────────────────────────────────
+  _startStatusPolling() {
+    this._stopStatusPolling();
+    this.statusInterval = setInterval(async () => {
+      try {
+        const state = await this.getPlaybackState();
+        this._sendToRenderer('mpv:poll', state);
+      } catch { /* ignore during transitions */ }
+    }, 500);
+  }
+
+  _stopStatusPolling() {
+    if (this.statusInterval) {
+      clearInterval(this.statusInterval);
+      this.statusInterval = null;
+    }
+  }
+
+  // ─── Utility ────────────────────────────────────────────────────────────────
+  _clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  _sendToRenderer(channel, data) {
+    if (this.win && !this.win.isDestroyed()) {
+      this.win.webContents.send(channel, data);
+    }
+  }
+
+  async destroy() {
+    this._stopStatusPolling();
+    this._clearReconnectTimer();
+    if (this.mpv) {
+      try { await this.mpv.quit(); } catch {}
+    }
+  }
+}
+
+module.exports = { MpvManager };

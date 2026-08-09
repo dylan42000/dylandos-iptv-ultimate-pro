@@ -1,0 +1,17 @@
+{
+  "versionCode": 46,
+  "versionName": "3.9.0",
+  "releaseNotes": "v3.9.0: FIXED: All images/posters now load correctly — root cause was OkHttp 5.0.0-alpha.14 binary-incompatible with Coil 2.7.0 (NoSuchMethodError on every fetch); downgraded to OkHttp 4.12.0 and pinned via resolutionStrategy. NEW: Movie Detail Screen — tap any movie poster to open a full detail view with backdrop, poster, rating, plot, director, cast, genre, runtime, MPAA rating, and similar titles rail. Play from detail screen or go back to the grid.",
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_LINK/app-firestick-release.apk?dl=1",
+      "apkSha256": "REPLACE_WITH_SHA256_AFTER_BUILD",
+      "apkSizeBytes": 0
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_PREMIUM_LINK/app-premium-release.apk?dl=1",
+      "apkSha256": "REPLACE_WITH_SHA256_AFTER_BUILD",
+      "apkSizeBytes": 0
+    }
+  }
+}

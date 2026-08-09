@@ -1,0 +1,38 @@
+{
+  "version": "2.5.1",
+  "versionCode": 28,
+  "releaseDate": "2026-04-23",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "TV Series: show seasons and episodes when the panel returns episodes but an empty season list (common on New/OTT categories); episode keys (1, 01, S1) handled",
+    "TV Series: D-pad — detail panel requests focus; scrim no longer steals focus; Back closes (Fire TV)",
+    "DVR: folder picker opens with initial Download on the chosen drive (FAT32/ExFAT USB); correct StorageVolume per app dir; persistable URI from result",
+    "DVR: Choose Drive / Choose Folder use the same tree intent flow with Download as the default subfolder to confirm",
+    "Build: version 2.5.1 (28); replace apkUrl and sha256 after you upload the new release APKs"
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/scl/fi/7dpcrymhz4rcbkx8fdknk/app-firestick-release.apk?rlkey=0own4sofo7xx7dy4lmqp4t5ps&st=21qpi8e6&dl=1",
+      "apkSize": 59009913,
+      "sha256": "DD41422FD11A4AA5921784CB2CD6F4CF68F6E2A5A143A4284C19CD5ACDAEE9F1",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["armeabi-v7a"]
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/scl/fi/r2en0qv7prbxghmjn8r2j/app-premium-release.apk?rlkey=xn7bempuow7g4gsnp86fb6yrm&st=pb64gwgy&dl=1",
+      "apkSize": 60268494,
+      "sha256": "BAEFE83D6EAEBFF3C629E7A16F91468CF1C20349203FC0CFB4B3FB7C4052FF0F",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["arm64-v8a"]
+    }
+  },
+  "apkUrl": "https://www.dropbox.com/scl/fi/7dpcrymhz4rcbkx8fdknk/app-firestick-release.apk?rlkey=0own4sofo7xx7dy4lmqp4t5ps&st=21qpi8e6&dl=1",
+  "apkSize": 59009913,
+  "sha256": "DD41422FD11A4AA5921784CB2CD6F4CF68F6E2A5A143A4284C19CD5ACDAEE9F1",
+  "notes": "After build: (1) Get-FileHash .\\app-firestick-release.apk -Algorithm SHA256 and same for premium. (2) Upload both APKs; paste direct links into this JSON. (3) Commit update.json in gist 6056e65b41641393abf585cecbd92d07 (or update GIST_UPDATE_URL in app/build.gradle.kts if you use a different gist)."
+}

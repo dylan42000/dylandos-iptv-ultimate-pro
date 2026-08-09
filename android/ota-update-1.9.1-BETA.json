@@ -1,0 +1,46 @@
+{
+  "versionCode": 20,
+  "versionName": "1.9.1-BETA",
+  "apkUrl": "https://www.dropbox.com/YOUR_FIRESTICK_DROPBOX_LINK_HERE/app-firestick-release.apk?dl=1",
+  "releaseNotes": "v1.9.1-BETA: Three surgical regression fixes for beta testing. All categories now display correctly (numeric category names no longer dropped). DVR playback fully fixed — recordings now store permanent content:// URIs and open a fresh file descriptor at playback time so USB/OTG drives are readable. Custom DYLANDOS app icon now applied across all screen densities.",
+  "changelog": [
+    "FIX: Live TV categories — numeric category names are no longer hidden (was filtering ALL categories on some servers)",
+    "FIX: DVR playback — permanent content:// URI now stored at recording start, not ephemeral /proc/self/fd path",
+    "FIX: DVR playback — fresh ParcelFileDescriptor opened via contentResolver at playback time (fd:// handoff to LibVLC)",
+    "FIX: DVR navigation — DvrScreen now routes to 'dvr' stream type so PlayerViewModel doesn't try to construct Xtream HTTP URL from a file path",
+    "NEW: Custom DYLANDOS brand icon applied to all mipmap densities (mdpi/hdpi/xhdpi/xxhdpi/xxxhdpi)",
+    "BUMP: versionCode 19 → 20, versionName 1.9.0-ULTRA → 1.9.1-BETA"
+  ],
+  "requirements": {
+    "minSdk": 21,
+    "targetSdk": 34,
+    "firestickOptimized": true,
+    "recommendedDevices": [
+      "Fire TV Stick 4K",
+      "Fire TV Stick 4K Max",
+      "Fire TV Stick Lite",
+      "Fire TV Cube",
+      "NVIDIA Shield",
+      "Chromecast with Google TV",
+      "Any Android 5.0+ device"
+    ]
+  },
+  "buildVariants": {
+    "firestick": {
+      "abi": "armeabi-v7a",
+      "target": "Fire TV Stick 4K (primary)",
+      "apkUrl": "https://www.dropbox.com/YOUR_FIRESTICK_DROPBOX_LINK_HERE/app-firestick-release.apk?dl=1",
+      "apkPath": "android/app/build/outputs/apk/firestick/release/app-firestick-release.apk"
+    },
+    "premium": {
+      "abi": "arm64-v8a",
+      "target": "High-end ARM64 Android devices",
+      "apkUrl": "https://www.dropbox.com/YOUR_PREMIUM_DROPBOX_LINK_HERE/app-premium-release.apk?dl=1",
+      "apkPath": "android/app/build/outputs/apk/premium/release/app-premium-release.apk"
+    }
+  },
+  "install": {
+    "adb_firestick": "adb install android/app/build/outputs/apk/firestick/release/app-firestick-release.apk",
+    "adb_premium":   "adb install android/app/build/outputs/apk/premium/release/app-premium-release.apk"
+  }
+}

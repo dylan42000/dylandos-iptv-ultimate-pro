@@ -1,0 +1,27 @@
+{
+  "_note": "PUBLISH TEMPLATE — This is the in-repo reference for the LIVE update gist (https://api.github.com/gists/6056e65b41641393abf585cecbd92d07). The LIVE gist currently advertises v4.6.3 / versionCode 62 while the app is at 4.10.5 / versionCode 85 — users on 62–84 never see an update. IMPORTANT: since v4.11 the app REFUSES update payloads with a blank or missing sha256 (fail-closed integrity check). Replace apkUrl and sha256 below with REAL values from a signed release build (compute with scripts/compute-sha256.ps1 or `sha256sum`) BEFORE pasting into the gist. Do not paste this file as-is.",
+  "versionCode": 85,
+  "version": "4.10.5",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "OTA integrity hardening: updates now require a SHA-256 checksum (unverified payloads are refused)",
+    "Settings: crash boundary added so a tab error can never close the app to the Firestick home screen",
+    "Settings: fixed stale About info (Hilt 2.57.2, target SDK 35)"
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_FIRESTICK_APK_URL",
+      "apkSize": 0,
+      "sha256": "REPLACE_WITH_FIRESTICK_SHA256"
+    },
+    "premium": {
+      "apkUrl": "REPLACE_WITH_PREMIUM_APK_URL",
+      "apkSize": 0,
+      "sha256": "REPLACE_WITH_PREMIUM_SHA256"
+    }
+  },
+  "apkUrl": "REPLACE_WITH_FIRESTICK_APK_URL",
+  "apkSize": 0,
+  "sha256": "REPLACE_WITH_FIRESTICK_SHA256"
+}

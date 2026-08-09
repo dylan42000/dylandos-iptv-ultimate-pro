@@ -1,0 +1,26 @@
+{
+  "versionCode": 56,
+  "version": "4.5.0",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "Fixed OTA installer not triggering — SHA-256 APK verification moved to background IO coroutine (was blocking main thread causing ANR on Firestick)",
+    "Fixed Settings tab crash — Categories tab rebuilt as LazyColumn; eliminates 500+ simultaneous flow collectors that caused OOM on low-RAM devices",
+    "Improved search responsiveness — debounce increased from 300ms to 500ms to prevent rapid DB queries on D-pad scroll",
+    "Added TimeshiftManager: 15-minute live-TV ring buffer written exclusively to USB/OTG external storage via getExternalFilesDirs()",
+    "Recording engine: 512 KB async write buffer on dedicated IO coroutine eliminates USB I/O stalls",
+    "Category memory: all three ViewModels (LiveTV, Movies, Series) persist selected category and scroll position via SavedStateHandle"
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_DROPBOX_DIRECT_LINK_FOR_FIRESTICK_APK",
+      "apkSize": 0,
+      "sha256": ""
+    },
+    "premium": {
+      "apkUrl": "REPLACE_WITH_DROPBOX_DIRECT_LINK_FOR_PREMIUM_APK",
+      "apkSize": 0,
+      "sha256": ""
+    }
+  }
+}

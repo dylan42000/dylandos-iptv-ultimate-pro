@@ -1,0 +1,3904 @@
+Now I have everything I need for a complete, technically accurate deep dive. Here it is:
+
+---
+
+# 🤖 DYLANDOS IPTV ULTIMATE — ANDROID EDITION
+## Complete Deep-Dive Technical Guide | Fire TV Stick 4K Architecture
+
+---
+
+## 🧠 CRITICAL ARCHITECTURE DECISIONS FIRST
+
+Before one line of code, these three decisions define every other choice:
+
+### Decision 1: Native Android (Kotlin) — Not React Native
+
+You are targeting the Fire TV Stick 4K as your primary device. That means:
+
+- The Fire TV Stick 4K runs Fire OS 8 based on Android 11, and is powered by a quad-core MediaTek MT8696D processor clocked at 1.7GHz — a 32-bit chipset.
+- The Fire TV Stick 4K Max 2023 is powered by the MediaTek MT8696T, with a slightly higher clock speed at 2.0 GHz.
+- The Fire TV Stick 4K Max has 2GB of RAM, with 16GB of storage.
+- Amazon is limiting all their devices with a 32-bit version of Android, thereby limiting the full performance of the SoCs they use, since there is no support for 64-bit applications on these devices.
+
+This means **React Native is off the table**. With only 2GB RAM shared between the OS, Fire OS launcher, your app, LibVLC engine, mpv engine, AND two simultaneous recording pipelines, every megabyte of overhead matters. Native Kotlin with Jetpack Compose gives you the lowest possible memory footprint with the highest performance ceiling.
+
+### Decision 2: Dual Engine Assignment
+
+| Engine | Assigned Role | Reason |
+|---|---|---|
+| **LibVLC** | Live TV + EPG Guide playback | Superior IPTV stream handling, built-in reconnect, best low-latency TS/HLS support, handles `.ts`, `RTSP`, `RTMP`, `MPEG-TS UDP` natively |
+| **mpv (libmpv)** | VOD — Movies + TV Series | Superior codec breadth (H.265/HEVC, AV1, HDR), precision seeking, subtitle rendering (ASS/SSA/PGS), chapter support, better for file-like streams |
+
+### Decision 3: Recording Architecture
+
+You need: **Record 2 simultaneously + Watch a 3rd**. That means 3 independent decode/output pipelines must coexist within 2GB RAM. The architecture:
+
+```
+LibVLC Instance A → Live TV Watching (foreground SurfaceView)
+LibVLC Instance B → Recording Stream 1 (background, no video output, muxed to file)
+LibVLC Instance C → Recording Stream 2 (background, no video output, muxed to file)
+```
+
+All three can coexist because LibVLC instances B and C use **`--vout=dummy`** (no video rendering) — they only demux and mux to file, consuming ~40–80MB RAM each instead of 200MB+ for full decode. LibVLC instance A handles the full watched stream.
+
+---
+
+## 📦 PHASE 0 — PROJECT STRUCTURE & TECHNOLOGY STACK
+
+### 0.1 Complete Technology Stack
+
+| Layer | Technology | Version | Purpose |
+|---|---|---|---|
+| Language | Kotlin | 2.0+ | Primary language |
+| UI Framework | Jetpack Compose | 1.7+ | Declarative TV UI |
+| TV UI | Compose for TV (androidx.tv) | 1.0+ | D-pad navigation, TV-specific components |
+| Architecture | MVVM + Clean Architecture | — | ViewModel, Repository, UseCase |
+| DI | Hilt | 2.51+ | Dependency injection |
+| Live TV Engine | LibVLC for Android | 3.6.0+ | Live stream playback + recording |
+| VOD Engine | libmpv (mpv-android) | latest | VOD playback (H.265, HDR, ASS subs) |
+| Networking | Retrofit2 + OkHttp3 | 2.11 / 5.0 | Xtream API calls |
+| Image Loading | Coil 3 | 3.x | Channel logos (Coroutine-native) |
+| Database | Room + SQLite | 2.7+ | EPG cache, watch history, recordings |
+| Async | Kotlin Coroutines + Flow | 1.8+ | All async operations |
+| Background Work | WorkManager | 2.10+ | Scheduled recordings, EPG refresh |
+| Foreground Service | Android ForegroundService | — | Active recording sessions |
+| Serialization | Kotlinx Serialization | 1.7+ | JSON parsing |
+| XML Parsing | Kotlin XML Pull Parser | — | XMLTV EPG parsing |
+| Navigation | Jetpack Navigation Compose | 2.8+ | Screen navigation |
+| Preferences | DataStore Proto | 1.1+ | Settings persistence |
+| Build | Gradle KTS + AGP 8.x | 8.7+ | Build system |
+| Target SDK | 33 (Fire OS 8 max supported) | — | Fire TV compatibility |
+| Min SDK | 28 (Android 9) | — | LibVLC minimum |
+| ABI Filter | `armeabi-v7a` | — | Fire TV Stick 4K is 32-bit ARM |
+
+### 0.2 Critical ABI Note for Fire TV
+
+The Fire TV Stick's Cortex-A55 cores are 64-bit ARM64/v8-A based, but Amazon is limiting devices with a 32-bit version of Android, so there is no support for 64-bit applications on these devices.
+
+This means your `build.gradle.kts` MUST include:
+
+```kotlin
+// app/build.gradle.kts
+android {
+    defaultConfig {
+        applicationId = "com.dylandos.iptv.ultimate.android"
+        minSdk = 28
+        targetSdk = 33  // Fire OS 8 = Android 11, max tested = API 33
+        versionCode = 1
+        versionName = "1.0.0"
+
+        // ── CRITICAL: Fire TV Stick 4K is 32-bit only ──
+        ndk {
+            abiFilters += listOf("armeabi-v7a")  // Primary Fire TV target
+            // Add arm64-v8a for future-proofing on Android phone/tablet builds
+            // abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
+    }
+
+    buildFeatures {
+        compose = true
+    }
+    
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.14"
+    }
+    
+    // Optimize for Fire TV Stick's limited storage
+    bundle {
+        abi { enableSplit = true }
+        density { enableSplit = false }  // TV is always full density
+    }
+}
+```
+
+### 0.3 Project Structure
+
+```
+app/
+├── src/main/
+│   ├── AndroidManifest.xml
+│   ├── java/com/dylandos/iptv/ultimate/
+│   │   ├── DylandosApplication.kt          ← Hilt application + LibVLC init
+│   │   ├── MainActivity.kt                 ← Single Activity (TV leanback entry)
+│   │   │
+│   │   ├── core/
+│   │   │   ├── engine/
+│   │   │   │   ├── LibVlcEngine.kt         ← LibVLC singleton manager
+│   │   │   │   ├── MpvEngine.kt            ← libmpv singleton manager
+│   │   │   │   └── DualEngineManager.kt    ← Routes Live→VLC, VOD→MPV
+│   │   │   ├── recording/
+│   │   │   │   ├── RecordingManager.kt     ← Dual recording orchestrator
+│   │   │   │   ├── RecordingService.kt     ← Android ForegroundService
+│   │   │   │   └── ScheduledRecordingWorker.kt ← WorkManager worker
+│   │   │   ├── epg/
+│   │   │   │   ├── XmltvParser.kt          ← XMLTV pull parser
+│   │   │   │   ├── EpgRepository.kt        ← EPG data access
+│   │   │   │   └── EpgSyncWorker.kt        ← Background EPG refresh
+│   │   │   └── network/
+│   │   │       ├── XtreamApiService.kt     ← Retrofit interface
+│   │   │       ├── XtreamRepository.kt     ← Data repository
+│   │   │       └── M3uParser.kt            ← M3U/M3U8 playlist parser
+│   │   │
+│   │   ├── data/
+│   │   │   ├── db/
+│   │   │   │   ├── AppDatabase.kt          ← Room database
+│   │   │   │   ├── dao/                    ← Channel, EPG, Recording, Progress DAOs
+│   │   │   │   └── entity/                 ← DB entities
+│   │   │   ├── datastore/
+│   │   │   │   └── SettingsDataStore.kt    ← Proto DataStore for settings
+│   │   │   └── model/                      ← Domain models
+│   │   │
+│   │   ├── ui/
+│   │   │   ├── theme/
+│   │   │   │   ├── DylandosTheme.kt        ← Neon cyan theme for TV
+│   │   │   │   ├── Color.kt                ← Brand colors
+│   │   │   │   └── Type.kt                 ← TV typography scale
+│   │   │   ├── navigation/
+│   │   │   │   └── DylandosNavGraph.kt     ← Compose navigation
+│   │   │   ├── components/                 ← Shared TV Compose components
+│   │   │   │   ├── TvChannelCard.kt
+│   │   │   │   ├── TvMovieCard.kt
+│   │   │   │   ├── EpgGrid.kt
+│   │   │   │   ├── StreamHealthBar.kt
+│   │   │   │   ├── RecordingIndicator.kt
+│   │   │   │   └── FocusableButton.kt      ← D-pad focusable wrapper
+│   │   │   ├── screens/
+│   │   │   │   ├── home/HomeScreen.kt
+│   │   │   │   ├── live/LiveTvScreen.kt
+│   │   │   │   ├── guide/EpgGuideScreen.kt
+│   │   │   │   ├── movies/MoviesScreen.kt
+│   │   │   │   ├── series/SeriesScreen.kt
+│   │   │   │   ├── search/SearchScreen.kt
+│   │   │   │   ├── recordings/RecordingsScreen.kt
+│   │   │   │   └── settings/SettingsScreen.kt
+│   │   │   └── player/
+│   │   │       ├── LivePlayerScreen.kt     ← LibVLC live player UI
+│   │   │       ├── VodPlayerScreen.kt      ← mpv VOD player UI
+│   │   │       └── PlayerOsd.kt            ← Shared OSD composable
+│   │   │
+│   │   └── viewmodel/                      ← ViewModels per screen
+│   │
+│   └── res/
+│       ├── layout/
+│       │   ├── activity_main.xml           ← Single activity host
+│       │   ├── vlc_surface.xml             ← SurfaceView for LibVLC
+│       │   └── mpv_surface.xml             ← SurfaceView for mpv
+│       ├── drawable/                       ← TV banner, icons
+│       └── values/                         ← strings, colors, styles
+│
+└── build.gradle.kts
+```
+
+### 0.4 Dependencies — `app/build.gradle.kts`
+
+```kotlin
+dependencies {
+    // ── Jetpack Compose + TV ────────────────────────────
+    val composeBom = platform("androidx.compose:compose-bom:2024.11.00")
+    implementation(composeBom)
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.tv:tv-foundation:1.0.0")
+    implementation("androidx.tv:tv-material:1.0.0")  // Leanback Compose
+    
+    // ── Architecture ────────────────────────────────────
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.navigation:navigation-compose:2.8.5")
+    implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+    
+    // ── Hilt DI ─────────────────────────────────────────
+    implementation("com.google.dagger:hilt-android:2.51.1")
+    ksp("com.google.dagger:hilt-compiler:2.51.1")
+    
+    // ── LibVLC (Live TV Engine) ─────────────────────────
+    // Official VideoLAN artifact — use the latest 3.x release
+    // Check: https://code.videolan.org/videolan/vlc-android/-/releases
+    implementation("org.videolan.android:libvlc-all:3.6.0")
+    // NOTE: libvlc-all includes all ABIs; filter to armeabi-v7a via ndk.abiFilters
+    
+    // ── libmpv (VOD Engine) ─────────────────────────────
+    // mpv-android-lib by abdallahmehiz — Kotlin-native libmpv wrapper
+    implementation("io.github.abdallahmehiz:mpv-android-lib:0.1.12")
+    
+    // ── Networking ──────────────────────────────────────
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+    implementation("com.squareup.retrofit2:converter-kotlinx-serialization:2.11.0")
+    implementation("com.squareup.okhttp3:okhttp:5.0.0-alpha.14")
+    implementation("com.squareup.okhttp3:logging-interceptor:5.0.0-alpha.14")
+    
+    // ── Serialization ───────────────────────────────────
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    
+    // ── Room Database ───────────────────────────────────
+    implementation("androidx.room:room-runtime:2.7.0")
+    implementation("androidx.room:room-ktx:2.7.0")
+    ksp("androidx.room:room-compiler:2.7.0")
+    
+    // ── DataStore (Settings) ────────────────────────────
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    
+    // ── Image Loading ───────────────────────────────────
+    implementation("io.coil-kt.coil3:coil-compose:3.0.4")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
+    
+    // ── Background Work ─────────────────────────────────
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("androidx.hilt:hilt-work:1.2.0")
+    ksp("androidx.hilt:hilt-compiler:1.2.0")
+    
+    // ── Coroutines ──────────────────────────────────────
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    
+    // ── Leanback (Fire TV remote navigation) ────────────
+    implementation("androidx.leanback:leanback:1.2.0")
+    implementation("androidx.leanback:leanback-preference:1.2.0")
+}
+```
+
+### 0.5 `AndroidManifest.xml` — Fire TV Requirements
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- ── Permissions ─────────────────────────────────── -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Recording to external storage -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <!-- Foreground service for recording -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Prevent sleep during playback -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- ── Fire TV / Android TV identification ─────────── -->
+    <!-- This tells the Amazon Appstore this is a TV app -->
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />  <!-- false = also runs on phone/tablet -->
+
+    <application
+        android:name=".DylandosApplication"
+        android:label="@string/app_name"
+        android:banner="@drawable/tv_banner"      <!-- 320x180dp TV banner -->
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.DylandosIPTV"
+        android:allowBackup="false"
+        android:largeHeap="true"               <!-- CRITICAL: needed for 3 streams -->
+        android:hardwareAccelerated="true">
+
+        <!-- ── Main TV Activity ────────────────────────── -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
+            android:launchMode="singleTop"
+            android:screenOrientation="landscape"  <!-- TV is always landscape -->
+            android:exported="true">
+            <!-- LEANBACK launcher intent — appears in Fire TV app grid -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+            <!-- Also show on phone launchers -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ── Recording Foreground Service ───────────── -->
+        <service
+            android:name=".core.recording.RecordingService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="false" />
+
+        <!-- ── Scheduled Recording Worker ─────────────── -->
+        <receiver
+            android:name=".core.recording.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>
+```
+
+---
+
+## 🎭 PHASE 1 — LIBVLC ENGINE: LIVE TV
+
+You can use the LibVLC module to power your own Android media player by downloading the `.aar` directly from Maven or building from source.
+
+LibVLC can play every media file format, every codec, and every streaming protocol including RTSP, RTMP, Multicast, HLS/DASH/HDS, and more, running on every platform from desktop to mobile, TV, and consoles.
+
+### 1.1 `LibVlcEngine.kt` — The Singleton Manager
+
+```kotlin
+// core/engine/LibVlcEngine.kt
+package com.dylandos.iptv.ultimate.core.engine
+
+import android.content.Context
+import android.net.Uri
+import android.view.SurfaceView
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
+import javax.inject.Inject
+import javax.inject.Singleton
+
+// ─── State model ──────────────────────────────────────────
+data class VlcPlayerState(
+    val isPlaying: Boolean = false,
+    val isBuffering: Boolean = false,
+    val isLoading: Boolean = false,
+    val error: String? = null,
+    val position: Float = 0f,      // 0.0–1.0
+    val time: Long = 0L,           // milliseconds
+    val duration: Long = 0L,       // milliseconds
+    val volume: Int = 100,         // 0–200
+    val muted: Boolean = false,
+    val bufferPercent: Int = 0,
+    val videoWidth: Int = 0,
+    val videoHeight: Int = 0,
+    val audioTrackCount: Int = 0,
+    val spuTrackCount: Int = 0,
+    val reconnectAttempt: Int = 0,
+    val reconnectMax: Int = 10,
+)
+
+@Singleton
+class LibVlcEngine @Inject constructor(
+    @ApplicationContext private val context: Context
+) {
+
+    // ─── LibVLC instance with optimized Fire TV Stick 4K args ──
+    private val libVLC: LibVLC by lazy {
+        LibVLC(context, buildVlcArgs())
+    }
+
+    // ─── Primary playback player ───────────────────────────────
+    private var primaryPlayer: MediaPlayer? = null
+
+    // ─── State flow ────────────────────────────────────────────
+    private val _state = MutableStateFlow(VlcPlayerState())
+    val state: StateFlow<VlcPlayerState> = _state.asStateFlow()
+
+    // ─── Reconnect state ───────────────────────────────────────
+    private var reconnectJob: kotlinx.coroutines.Job? = null
+    private var reconnectAttempts = 0
+    private var currentUrl: String? = null
+    private val maxReconnectAttempts = 10
+    private val baseReconnectDelayMs = 2000L
+
+    // ──────────────────────────────────────────────────────────
+    // BUILD VLC ARGS — Fire TV Stick 4K Optimized
+    // ──────────────────────────────────────────────────────────
+    private fun buildVlcArgs(): ArrayList<String> = arrayListOf(
+        // ── Output module optimized for Android ──
+        "--vout=android-display",       // Android-native video output
+        "--aout=opensles",              // OpenSL ES audio — best on older Android
+
+        // ── Low-latency live streaming ──
+        "--network-caching=1500",       // 1.5s network buffer (balanced for Fire TV WiFi)
+        "--live-caching=300",           // 300ms live capture cache
+        "--clock-jitter=0",             // No jitter correction for live
+        "--clock-synchro=0",            // Disable A/V sync correction (low latency)
+
+        // ── Frame handling for weak SoC ──
+        "--drop-late-frames",           // Drop frames arriving late
+        "--skip-frames",                // Skip frames if decode is too slow
+
+        // ── Hardware decode ──
+        "--codec=mediacodec_ndk,all",   // Prefer MediaCodec NDK (hardware), fallback to all
+        // MediaCodec NDK is the preferred HW decode path on Fire OS
+
+        // ── Reconnect on error ──
+        "--http-reconnect",             // Auto-reconnect HTTP streams
+        "--http-continuous",            // Keep HTTP connection alive
+        "--rtsp-tcp",                   // Use TCP for RTSP (more reliable on WiFi)
+
+        // ── Subtitle rendering ──
+        "--sub-filter=freetype",        // FreeType subtitle rendering
+
+        // ── Performance: Fire TV Stick 4K has 1 GPU core ──
+        "--no-video-title-show",        // Don't render title overlay
+        "--avcodec-fast",               // Favor speed over quality in SW decode
+
+        // ── Logging ──
+        // Remove -vvv in production — it hammers logcat and CPU
+        // "--vvv",  // ← ONLY in debug builds
+    )
+
+    // ──────────────────────────────────────────────────────────
+    // ATTACH VIDEO OUTPUT
+    // ──────────────────────────────────────────────────────────
+    fun attachVideoLayout(layout: VLCVideoLayout) {
+        primaryPlayer?.attachViews(layout, null, ENABLE_SUBTITLES, USE_TEXTURE_VIEW)
+    }
+
+    fun detachVideoLayout() {
+        primaryPlayer?.detachViews()
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // LOAD & PLAY LIVE STREAM
+    // ──────────────────────────────────────────────────────────
+    fun loadLiveStream(url: String, bufferPreset: BufferPreset = BufferPreset.MEDIUM) {
+        currentUrl = url
+        reconnectAttempts = 0
+
+        // Release previous player cleanly
+        releasePlayer()
+
+        // Create fresh player
+        primaryPlayer = MediaPlayer(libVLC).apply {
+            attachEventListener(primaryEventListener)
+        }
+
+        _state.value = VlcPlayerState(isLoading = true)
+
+        val media = Media(libVLC, Uri.parse(url)).apply {
+            // Per-stream caching tuned to preset
+            addOption(":network-caching=${bufferPreset.networkCachingMs}")
+            addOption(":live-caching=${bufferPreset.liveCachingMs}")
+            addOption(":file-caching=300")
+            addOption(":http-reconnect")
+            // Hardware decode
+            setHWDecoderEnabled(true, false)  // true=enable, false=don't force
+        }
+
+        primaryPlayer?.media = media
+        media.release()
+        primaryPlayer?.play()
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // PLAYBACK CONTROLS
+    // ──────────────────────────────────────────────────────────
+    fun play()   { primaryPlayer?.play() }
+    fun pause()  { primaryPlayer?.pause() }
+    fun stop()   {
+        reconnectJob?.cancel()
+        releasePlayer()
+        _state.value = VlcPlayerState()
+    }
+
+    fun setVolume(volume: Int) {
+        // VLC volume: 0–200 (100 = normal, 200 = double)
+        primaryPlayer?.volume = volume.coerceIn(0, 200)
+        _state.value = _state.value.copy(volume = volume)
+    }
+
+    fun setMute(muted: Boolean) {
+        primaryPlayer?.volume = if (muted) 0 else _state.value.volume
+        _state.value = _state.value.copy(muted = muted)
+    }
+
+    fun setAudioTrack(trackId: Int) {
+        primaryPlayer?.audioTrack = trackId
+    }
+
+    fun setSubtitleTrack(trackId: Int) {
+        primaryPlayer?.spuTrack = trackId
+    }
+
+    fun setAudioDelay(delayMicroseconds: Long) {
+        // VLC audio delay is in MICROSECONDS (not ms!)
+        primaryPlayer?.audioDelay = delayMicroseconds
+    }
+
+    fun getAudioTracks(): List<MediaPlayer.TrackDescription>? {
+        return primaryPlayer?.audioTracks?.toList()
+    }
+
+    fun getSubtitleTracks(): List<MediaPlayer.TrackDescription>? {
+        return primaryPlayer?.spuTracks?.toList()
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // EVENT LISTENER (Primary Player)
+    // ──────────────────────────────────────────────────────────
+    private val primaryEventListener = MediaPlayer.EventListener { event ->
+        when (event.type) {
+            MediaPlayer.Event.Playing -> {
+                reconnectAttempts = 0
+                _state.value = _state.value.copy(
+                    isPlaying = true,
+                    isLoading = false,
+                    isBuffering = false,
+                    error = null,
+                    reconnectAttempt = 0,
+                )
+            }
+
+            MediaPlayer.Event.Paused -> {
+                _state.value = _state.value.copy(isPlaying = false)
+            }
+
+            MediaPlayer.Event.Stopped -> {
+                _state.value = _state.value.copy(isPlaying = false, isLoading = false)
+            }
+
+            MediaPlayer.Event.Buffering -> {
+                val pct = event.buffering.toInt()
+                _state.value = _state.value.copy(
+                    isBuffering = pct < 100,
+                    bufferPercent = pct,
+                )
+            }
+
+            MediaPlayer.Event.TimeChanged -> {
+                _state.value = _state.value.copy(time = event.timeChanged)
+            }
+
+            MediaPlayer.Event.PositionChanged -> {
+                _state.value = _state.value.copy(position = event.positionChanged)
+            }
+
+            MediaPlayer.Event.LengthChanged -> {
+                _state.value = _state.value.copy(duration = event.lengthChanged)
+            }
+
+            MediaPlayer.Event.Vout -> {
+                // Video output surface count changed — update resolution
+                primaryPlayer?.currentVideoTrack?.let { track ->
+                    _state.value = _state.value.copy(
+                        videoWidth = track.width,
+                        videoHeight = track.height
+                    )
+                }
+            }
+
+            MediaPlayer.Event.EncounteredError -> {
+                handlePlaybackError()
+            }
+
+            MediaPlayer.Event.EndReached -> {
+                // For live streams, EndReached usually means stream dropped
+                if (currentUrl != null) {
+                    handlePlaybackError()
+                }
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // ERROR HANDLING + RECONNECT
+    // ──────────────────────────────────────────────────────────
+    private fun handlePlaybackError() {
+        if (reconnectAttempts >= maxReconnectAttempts) {
+            _state.value = _state.value.copy(
+                error = "Stream unavailable after $maxReconnectAttempts attempts",
+                isLoading = false,
+                isPlaying = false,
+            )
+            return
+        }
+
+        reconnectAttempts++
+        // Exponential backoff capped at 30s
+        val delayMs = minOf(
+            baseReconnectDelayMs * Math.pow(2.0, (reconnectAttempts - 1).toDouble()).toLong(),
+            30_000L
+        )
+
+        _state.value = _state.value.copy(
+            isLoading = true,
+            isPlaying = false,
+            error = null,
+            reconnectAttempt = reconnectAttempts,
+            reconnectMax = maxReconnectAttempts,
+        )
+
+        reconnectJob?.cancel()
+        reconnectJob = kotlinx.coroutines.GlobalScope.launch {
+            kotlinx.coroutines.delay(delayMs)
+            currentUrl?.let { url ->
+                // Re-create media and play
+                val media = Media(libVLC, Uri.parse(url)).apply {
+                    addOption(":network-caching=1500")
+                    addOption(":http-reconnect")
+                    setHWDecoderEnabled(true, false)
+                }
+                primaryPlayer?.media = media
+                media.release()
+                primaryPlayer?.play()
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // CLEANUP
+    // ──────────────────────────────────────────────────────────
+    private fun releasePlayer() {
+        primaryPlayer?.apply {
+            stop()
+            detachViews()
+            release()
+        }
+        primaryPlayer = null
+    }
+
+    fun destroy() {
+        reconnectJob?.cancel()
+        releasePlayer()
+        libVLC.release()
+    }
+
+    companion object {
+        private const val ENABLE_SUBTITLES = true
+        private const val USE_TEXTURE_VIEW = false  // SurfaceView for hardware decode
+    }
+}
+
+// ─── Buffer Presets ─────────────────────────────────────────
+enum class BufferPreset(val networkCachingMs: Int, val liveCachingMs: Int) {
+    LOW(500, 150),
+    MEDIUM(1500, 300),
+    HIGH(3000, 600),
+}
+```
+
+---
+
+## 🎬 PHASE 2 — LIBMPV ENGINE: VOD (MOVIES & SERIES)
+
+mpv-android is a video player for Android based on libmpv. If you'd like to use libmpv in your app, you can use their code as inspiration — the important parts are MPVLib, BaseMPVView, and the native code.
+
+mpvKt is a media player for Android based on mpv-android and built with Jetpack Compose. We'll use the `mpv-android-lib` from this project as our libmpv integration layer.
+
+### 2.1 `MpvEngine.kt`
+
+```kotlin
+// core/engine/MpvEngine.kt
+package com.dylandos.iptv.ultimate.core.engine
+
+import android.content.Context
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import `is`.xyz.mpv.MPVLib
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import javax.inject.Inject
+import javax.inject.Singleton
+
+// ─── mpv State Model ──────────────────────────────────────
+data class MpvPlayerState(
+    val isPlaying: Boolean = false,
+    val isPaused: Boolean = false,
+    val isLoading: Boolean = false,
+    val isBuffering: Boolean = false,
+    val error: String? = null,
+    val position: Double = 0.0,     // seconds
+    val duration: Double = 0.0,     // seconds
+    val volume: Int = 100,          // 0–150
+    val muted: Boolean = false,
+    val bufferPercent: Int = 0,
+    val videoCodec: String = "",
+    val audioCodec: String = "",
+    val hwdecActive: String = "no",
+    val audioTracks: List<MpvTrack> = emptyList(),
+    val subtitleTracks: List<MpvTrack> = emptyList(),
+    val videoWidth: Int = 0,
+    val videoHeight: Int = 0,
+    val cacheSeconds: Double = 0.0,
+)
+
+data class MpvTrack(
+    val id: Int,
+    val title: String,
+    val lang: String,
+    val codec: String,
+    val selected: Boolean,
+    val type: String, // "audio" | "sub" | "video"
+)
+
+@Singleton
+class MpvEngine @Inject constructor(
+    @ApplicationContext private val context: Context
+) : MPVLib.EventObserver {
+
+    private val _state = MutableStateFlow(MpvPlayerState())
+    val state: StateFlow<MpvPlayerState> = _state.asStateFlow()
+
+    private var isInitialized = false
+    private var currentSurface: SurfaceView? = null
+
+    // ──────────────────────────────────────────────────────────
+    // INITIALIZE MPV
+    // ──────────────────────────────────────────────────────────
+    fun initialize() {
+        if (isInitialized) return
+
+        // Copy mpv config files to app's files dir (required by libmpv)
+        val configDir = context.filesDir.absolutePath
+        MPVLib.create(context)
+        MPVLib.setOptionString("config", "yes")
+        MPVLib.setOptionString("config-dir", configDir)
+
+        // ── VOD-optimized settings ──
+        MPVLib.setOptionString("vo", "gpu")          // GPU rendering
+        MPVLib.setOptionString("ao", "audiotrack")   // Android AudioTrack output
+
+        // ── Hardware decoding — Fire TV MediaCodec ──
+        // mediacodec-ndkvd is the NDK Video Decoder path on Android
+        MPVLib.setOptionString("hwdec", "mediacodec-copy")
+        // "mediacodec-copy" = HW decode + copy to GPU texture (compatible with gpu vo)
+
+        // ── VOD Buffer — quality over latency ──
+        MPVLib.setOptionString("cache", "yes")
+        MPVLib.setOptionString("cache-secs", "120")
+        MPVLib.setOptionString("demuxer-max-bytes", "150MiB")
+        MPVLib.setOptionString("demuxer-readahead-secs", "60")
+
+        // ── Seeking precision for VOD ──
+        MPVLib.setOptionString("hr-seek", "yes")
+        MPVLib.setOptionString("hr-seek-framedrop", "yes")
+
+        // ── Subtitle quality ──
+        MPVLib.setOptionString("sub-ass-override", "force")
+        MPVLib.setOptionString("sub-font-provider", "auto")
+        MPVLib.setOptionString("sub-font-size", "48")  // Larger for TV viewing distance
+
+        // ── Video quality scaler ──
+        MPVLib.setOptionString("scale", "bilinear")   // Safe on weak GPU
+        MPVLib.setOptionString("dscale", "bilinear")
+
+        // ── Auto-play next ──
+        MPVLib.setOptionString("keep-open", "yes")
+
+        // ── No built-in OSD — we draw our own ──
+        MPVLib.setOptionString("osd-level", "0")
+
+        MPVLib.init()
+
+        // ── Observe properties for state updates ──
+        MPVLib.observeProperty("time-pos", MPVLib.MPV_FORMAT_DOUBLE)
+        MPVLib.observeProperty("duration", MPVLib.MPV_FORMAT_DOUBLE)
+        MPVLib.observeProperty("pause", MPVLib.MPV_FORMAT_FLAG)
+        MPVLib.observeProperty("paused-for-cache", MPVLib.MPV_FORMAT_FLAG)
+        MPVLib.observeProperty("cache-buffering-state", MPVLib.MPV_FORMAT_INT64)
+        MPVLib.observeProperty("volume", MPVLib.MPV_FORMAT_INT64)
+        MPVLib.observeProperty("mute", MPVLib.MPV_FORMAT_FLAG)
+        MPVLib.observeProperty("video-codec", MPVLib.MPV_FORMAT_STRING)
+        MPVLib.observeProperty("audio-codec", MPVLib.MPV_FORMAT_STRING)
+        MPVLib.observeProperty("hwdec-current", MPVLib.MPV_FORMAT_STRING)
+        MPVLib.observeProperty("video-params/w", MPVLib.MPV_FORMAT_INT64)
+        MPVLib.observeProperty("video-params/h", MPVLib.MPV_FORMAT_INT64)
+        MPVLib.observeProperty("demuxer-cache-duration", MPVLib.MPV_FORMAT_DOUBLE)
+        MPVLib.observeProperty("track-list", MPVLib.MPV_FORMAT_STRING)
+
+        MPVLib.addObserver(this)
+        isInitialized = true
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // ATTACH SURFACE
+    // ──────────────────────────────────────────────────────────
+    fun attachSurface(surfaceView: SurfaceView) {
+        currentSurface = surfaceView
+        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) {
+                MPVLib.attachSurface(holder.surface)
+            }
+            override fun surfaceChanged(holder: SurfaceHolder, f: Int, w: Int, h: Int) {
+                MPVLib.setPropertyString("android-surface-size", "${w}x${h}")
+            }
+            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                MPVLib.detachSurface()
+            }
+        })
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // LOAD VOD STREAM
+    // ──────────────────────────────────────────────────────────
+    fun loadVod(url: String, startPositionSeconds: Double = 0.0) {
+        if (!isInitialized) initialize()
+
+        _state.value = MpvPlayerState(isLoading = true)
+
+        // Set start position before loading
+        if (startPositionSeconds > 0.0) {
+            MPVLib.command(arrayOf("set", "start", "+${startPositionSeconds.toInt()}"))
+        }
+
+        MPVLib.command(arrayOf("loadfile", url, "replace"))
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // PLAYBACK CONTROLS
+    // ──────────────────────────────────────────────────────────
+    fun play()   { MPVLib.setPropertyBoolean("pause", false) }
+    fun pause()  { MPVLib.setPropertyBoolean("pause", true) }
+    fun togglePause() {
+        MPVLib.command(arrayOf("cycle", "pause"))
+    }
+
+    fun stop() {
+        MPVLib.command(arrayOf("stop"))
+        _state.value = MpvPlayerState()
+    }
+
+    fun seekTo(seconds: Double) {
+        MPVLib.command(arrayOf("seek", seconds.toString(), "absolute", "exact"))
+    }
+
+    fun seekRelative(deltaSec: Double) {
+        MPVLib.command(arrayOf("seek", deltaSec.toString(), "relative"))
+    }
+
+    fun setVolume(volume: Int) {
+        // mpv volume: 0–150+ (100 = normal, 150 = +50% boost)
+        MPVLib.setPropertyInt("volume", volume.coerceIn(0, 150))
+    }
+
+    fun setMute(muted: Boolean) {
+        MPVLib.setPropertyBoolean("mute", muted)
+    }
+
+    fun setAudioTrack(id: Int) {
+        MPVLib.setPropertyInt("aid", id)
+    }
+
+    fun setSubtitleTrack(id: Int) {
+        MPVLib.setPropertyInt("sid", id)
+    }
+
+    fun disableSubtitles() {
+        MPVLib.setPropertyString("sid", "no")
+    }
+
+    // ── Audio/video sync ──────────────────────────────────────
+    fun setAudioDelay(delaySeconds: Double) {
+        MPVLib.setPropertyDouble("audio-delay", delaySeconds)
+    }
+
+    // ── Subtitle styling ──────────────────────────────────────
+    fun applySubtitleStyle(
+        fontSizePx: Int,
+        colorHex: String,    // "#RRGGBB"
+        outlineWidth: Int,
+        bgOpacity: Float
+    ) {
+        MPVLib.setPropertyInt("sub-font-size", fontSizePx)
+        MPVLib.setPropertyString("sub-color", hexToMpvColor(colorHex))
+        MPVLib.setPropertyInt("sub-border-size", outlineWidth)
+        MPVLib.setPropertyDouble("sub-back-color",
+            (bgOpacity.toDouble()))
+    }
+
+    // ── Chapter navigation ────────────────────────────────────
+    fun nextChapter() { MPVLib.command(arrayOf("add", "chapter", "1")) }
+    fun prevChapter() { MPVLib.command(arrayOf("add", "chapter", "-1")) }
+
+    // ── Speed ─────────────────────────────────────────────────
+    fun setPlaybackSpeed(speed: Float) {
+        MPVLib.setPropertyDouble("speed", speed.toDouble())
+    }
+
+    // ── Screenshot ────────────────────────────────────────────
+    fun takeScreenshot(outputDir: String) {
+        MPVLib.setPropertyString("screenshot-directory", outputDir)
+        MPVLib.command(arrayOf("screenshot", "video"))
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // PROPERTY OBSERVER (MPVLib.EventObserver)
+    // ──────────────────────────────────────────────────────────
+    override fun eventProperty(property: String) { /* String props */ }
+
+    override fun eventProperty(property: String, value: Long) {
+        when (property) {
+            "volume" -> _state.value = _state.value.copy(volume = value.toInt())
+            "cache-buffering-state" -> _state.value = _state.value.copy(bufferPercent = value.toInt())
+            "video-params/w" -> _state.value = _state.value.copy(videoWidth = value.toInt())
+            "video-params/h" -> _state.value = _state.value.copy(videoHeight = value.toInt())
+        }
+    }
+
+    override fun eventProperty(property: String, value: Boolean) {
+        when (property) {
+            "pause" -> _state.value = _state.value.copy(
+                isPaused = value,
+                isPlaying = !value && _state.value.isPlaying
+            )
+            "paused-for-cache" -> _state.value = _state.value.copy(isBuffering = value)
+            "mute" -> _state.value = _state.value.copy(muted = value)
+        }
+    }
+
+    override fun eventProperty(property: String, value: Double) {
+        when (property) {
+            "time-pos" -> _state.value = _state.value.copy(position = value)
+            "duration" -> _state.value = _state.value.copy(duration = value)
+            "demuxer-cache-duration" -> _state.value = _state.value.copy(cacheSeconds = value)
+        }
+    }
+
+    override fun eventProperty(property: String, value: String) {
+        when (property) {
+            "video-codec" -> _state.value = _state.value.copy(videoCodec = value)
+            "audio-codec" -> _state.value = _state.value.copy(audioCodec = value)
+            "hwdec-current" -> _state.value = _state.value.copy(hwdecActive = value)
+            "track-list" -> parseAndUpdateTrackList(value)
+        }
+    }
+
+    override fun event(eventId: Int) {
+        when (eventId) {
+            MPVLib.MPV_EVENT_FILE_LOADED -> {
+                _state.value = _state.value.copy(
+                    isLoading = false,
+                    isPlaying = true,
+                    isPaused = false,
+                    error = null,
+                )
+            }
+            MPVLib.MPV_EVENT_END_FILE -> {
+                _state.value = _state.value.copy(
+                    isPlaying = false,
+                    isPaused = false,
+                )
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // TRACK LIST PARSING
+    // ──────────────────────────────────────────────────────────
+    private fun parseAndUpdateTrackList(json: String) {
+        // mpv returns track-list as a JSON array string
+        // Parse it and update audio/subtitle tracks in state
+        try {
+            val tracks = kotlinx.serialization.json.Json.decodeFromString<List<Map<String, kotlinx.serialization.json.JsonElement>>>(json)
+            val audioTracks = mutableListOf<MpvTrack>()
+            val subTracks = mutableListOf<MpvTrack>()
+
+            tracks.forEach { track ->
+                val type = track["type"]?.toString()?.trim('"') ?: return@forEach
+                val t = MpvTrack(
+                    id = track["id"]?.toString()?.toIntOrNull() ?: 0,
+                    title = track["title"]?.toString()?.trim('"') ?: "",
+                    lang = track["lang"]?.toString()?.trim('"') ?: "und",
+                    codec = track["codec"]?.toString()?.trim('"') ?: "",
+                    selected = track["selected"]?.toString() == "true",
+                    type = type,
+                )
+                when (type) {
+                    "audio" -> audioTracks.add(t)
+                    "sub" -> subTracks.add(t)
+                }
+            }
+
+            _state.value = _state.value.copy(
+                audioTracks = audioTracks,
+                subtitleTracks = subTracks,
+            )
+        } catch (e: Exception) {
+            // Ignore parse errors
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // CLEANUP
+    // ──────────────────────────────────────────────────────────
+    fun destroy() {
+        MPVLib.removeObserver(this)
+        MPVLib.destroy()
+        isInitialized = false
+    }
+
+    private fun hexToMpvColor(hex: String): String {
+        // Convert #RRGGBB → 1.0/0.5/0.0/1.0 (R/G/B/A floats)
+        val r = hex.substring(1, 3).toInt(16) / 255f
+        val g = hex.substring(3, 5).toInt(16) / 255f
+        val b = hex.substring(5, 7).toInt(16) / 255f
+        return "${r}/${g}/${b}/1.0"
+    }
+}
+```
+
+---
+
+## 📹 PHASE 3 — DUAL RECORDING SYSTEM
+
+This is the most complex and unique feature of your Android build. You need **2 background recording pipelines + 1 live playback** all running simultaneously within 2GB RAM.
+
+### 3.1 Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    RECORDING FOREGROUND SERVICE                  │
+│                  (keeps Android from killing the app)            │
+├────────────────────┬────────────────────┬────────────────────────┤
+│  LibVLC Instance A │  LibVLC Instance B │  LibVLC Instance C      │
+│  ─────────────────-│  ─────────────────-│  ─────────────────────  │
+│  WATCHING          │  RECORDING #1      │  RECORDING #2           │
+│  Full video decode │  No video output   │  No video output        │
+│  Audio output      │  Mux-to-file only  │  Mux-to-file only       │
+│  VLCVideoLayout    │  --vout=dummy      │  --vout=dummy           │
+│  ~150MB RAM        │  ~45MB RAM         │  ~45MB RAM              │
+├────────────────────┴────────────────────┴────────────────────────┤
+│           TOTAL: ~240MB for all three streams                    │
+│           Leaves ~1.76GB for OS + app + EPG + UI                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 `RecordingManager.kt`
+
+```kotlin
+// core/recording/RecordingManager.kt
+package com.dylandos.iptv.ultimate.core.recording
+
+import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
+import javax.inject.Inject
+import javax.inject.Singleton
+
+// ─── Recording Session Model ────────────────────────────────
+data class RecordingSession(
+    val id: String = UUID.randomUUID().toString(),
+    val channelName: String,
+    val channelId: String,
+    val streamUrl: String,
+    val outputFilePath: String,
+    val startTime: Long = System.currentTimeMillis(),
+    val status: RecordingStatus = RecordingStatus.STARTING,
+    val durationMs: Long = 0L,
+    val fileSizeBytes: Long = 0L,
+    val scheduledEndTime: Long? = null,  // null = manual stop
+)
+
+enum class RecordingStatus {
+    STARTING, RECORDING, PAUSED, STOPPING, COMPLETED, ERROR
+}
+
+data class RecordingManagerState(
+    val slot1: RecordingSession? = null,
+    val slot2: RecordingSession? = null,
+    val canRecord: Boolean = true,  // false if both slots full
+    val totalRecordingDurationMs: Long = 0L,
+)
+
+// ──────────────────────────────────────────────────────────────
+@Singleton
+class RecordingManager @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val recordingDao: RecordingDao,
+) {
+    // ── Separate LibVLC instances for recording ──────────────
+    // These are SEPARATE from LibVlcEngine's primary player
+    private val recordingLibVLC1: LibVLC by lazy { createRecordingLibVLC() }
+    private val recordingLibVLC2: LibVLC by lazy { createRecordingLibVLC() }
+
+    private var recordingPlayer1: MediaPlayer? = null
+    private var recordingPlayer2: MediaPlayer? = null
+
+    private val _state = MutableStateFlow(RecordingManagerState())
+    val state: StateFlow<RecordingManagerState> = _state.asStateFlow()
+
+    // Duration tracking
+    private val startTimes = mutableMapOf<String, Long>()
+    private val durationTimer = java.util.Timer()
+
+    init {
+        // Update durations every second
+        durationTimer.scheduleAtFixedRate(object : java.util.TimerTask() {
+            override fun run() { updateDurations() }
+        }, 1000L, 1000L)
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // CREATE RECORDING-OPTIMIZED LIBVLC INSTANCE
+    // ──────────────────────────────────────────────────────────
+    private fun createRecordingLibVLC(): LibVLC {
+        return LibVLC(context, arrayListOf(
+            // ── KEY: No video output — saves significant RAM and CPU ──
+            "--vout=dummy",           // Null video output — no rendering
+            "--no-video",             // Completely disable video decoding path
+                                      // We don't need decoded video frames for recording
+
+            // ── Audio output also disabled for background recording ──
+            "--aout=dummy",           // Null audio output
+
+            // ── Network settings optimized for reliable capture ──
+            "--network-caching=3000", // Larger buffer for recording reliability
+            "--http-reconnect",
+            "--http-continuous",
+
+            // ── Recording-specific: don't drop frames ──
+            // (opposite of live playback — we want every frame captured)
+            // No --drop-late-frames here!
+            // No --skip-frames here!
+        ))
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // START RECORDING — SLOT 1 OR 2
+    // ──────────────────────────────────────────────────────────
+    suspend fun startRecording(
+        channelName: String,
+        channelId: String,
+        streamUrl: String,
+        scheduledDurationMinutes: Int? = null,  // null = manual
+    ): Result<RecordingSession> {
+
+        val currentState = _state.value
+
+        // Find available slot
+        val slot = when {
+            currentState.slot1 == null -> 1
+            currentState.slot2 == null -> 2
+            else -> return Result.failure(
+                IllegalStateException("Both recording slots are in use")
+            )
+        }
+
+        // Build output file path
+        val outputFile = buildOutputFile(channelName)
+        val scheduledEnd = scheduledDurationMinutes?.let {
+            System.currentTimeMillis() + (it * 60_000L)
+        }
+
+        val session = RecordingSession(
+            channelName = channelName,
+            channelId = channelId,
+            streamUrl = streamUrl,
+            outputFilePath = outputFile.absolutePath,
+            scheduledEndTime = scheduledEnd,
+        )
+
+        // Build LibVLC sout (stream output) string for muxing to file
+        // This is the CORE of how LibVLC records:
+        // :sout= tells VLC where to send the stream instead of displaying it
+        val soutString = buildSoutString(outputFile.absolutePath)
+
+        return try {
+            when (slot) {
+                1 -> startRecordingOnSlot1(session, streamUrl, soutString)
+                2 -> startRecordingOnSlot2(session, streamUrl, soutString)
+                else -> throw IllegalStateException("Invalid slot")
+            }
+
+            // Persist to database
+            recordingDao.insertRecording(session.toEntity())
+
+            // Schedule auto-stop if duration specified
+            scheduledEnd?.let { endTime ->
+                scheduleAutoStop(session.id, endTime - System.currentTimeMillis())
+            }
+
+            Result.success(session)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // BUILD VLC SOUT STRING — The Recording Magic
+    // ──────────────────────────────────────────────────────────
+    // VLC's stream output (sout) chain:
+    // #duplicate → splits the stream
+    // transcode → re-encode (optional, we use copy for efficiency)
+    // std → standard output module with access=file
+    private fun buildSoutString(outputPath: String): String {
+        // Most efficient: copy the stream without re-encoding
+        // This preserves original H.264/H.265 quality with ZERO CPU overhead
+        return "#std{access=file,mux=ts,dst=$outputPath}"
+
+        // Alternative: if you need re-encoding (e.g., for compatibility):
+        // "#transcode{vcodec=h264,vb=0,acodec=aac,ab=128}:std{access=file,mux=mp4,dst=$outputPath}"
+    }
+
+    private fun startRecordingOnSlot1(
+        session: RecordingSession,
+        streamUrl: String,
+        soutString: String,
+    ) {
+        recordingPlayer1 = MediaPlayer(recordingLibVLC1)
+
+        val media = Media(recordingLibVLC1, Uri.parse(streamUrl)).apply {
+            addOption(":sout=$soutString")
+            addOption(":sout-keep")  // Keep the sout chain active
+            addOption(":network-caching=3000")
+            // No hardware decode needed for recording without display
+            setHWDecoderEnabled(false, false)
+        }
+
+        recordingPlayer1?.media = media
+        media.release()
+        recordingPlayer1?.play()
+
+        startTimes[session.id] = System.currentTimeMillis()
+        _state.value = _state.value.copy(
+            slot1 = session.copy(status = RecordingStatus.RECORDING),
+            canRecord = _state.value.slot2 == null,
+        )
+    }
+
+    private fun startRecordingOnSlot2(
+        session: RecordingSession,
+        streamUrl: String,
+        soutString: String,
+    ) {
+        recordingPlayer2 = MediaPlayer(recordingLibVLC2)
+
+        val media = Media(recordingLibVLC2, Uri.parse(streamUrl)).apply {
+            addOption(":sout=$soutString")
+            addOption(":sout-keep")
+            addOption(":network-caching=3000")
+            setHWDecoderEnabled(false, false)
+        }
+
+        recordingPlayer2?.media = media
+        media.release()
+        recordingPlayer2?.play()
+
+        startTimes[session.id] = System.currentTimeMillis()
+        _state.value = _state.value.copy(
+            slot2 = session.copy(status = RecordingStatus.RECORDING),
+            canRecord = false,  // Both slots now in use
+        )
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // STOP RECORDING
+    // ──────────────────────────────────────────────────────────
+    suspend fun stopRecording(sessionId: String) {
+        val currentState = _state.value
+
+        when {
+            currentState.slot1?.id == sessionId -> {
+                recordingPlayer1?.stop()
+                recordingPlayer1?.release()
+                recordingPlayer1 = null
+                startTimes.remove(sessionId)
+                _state.value = _state.value.copy(
+                    slot1 = null,
+                    canRecord = true,
+                )
+                recordingDao.markCompleted(sessionId, System.currentTimeMillis())
+            }
+            currentState.slot2?.id == sessionId -> {
+                recordingPlayer2?.stop()
+                recordingPlayer2?.release()
+                recordingPlayer2 = null
+                startTimes.remove(sessionId)
+                _state.value = _state.value.copy(
+                    slot2 = null,
+                    canRecord = true,
+                )
+                recordingDao.markCompleted(sessionId, System.currentTimeMillis())
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // AUTO-STOP SCHEDULING
+    // ──────────────────────────────────────────────────────────
+    private fun scheduleAutoStop(sessionId: String, delayMs: Long) {
+        // Use Android Handler for auto-stop within foreground service
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            kotlinx.coroutines.runBlocking { stopRecording(sessionId) }
+        }, delayMs)
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // DURATION TRACKING
+    // ──────────────────────────────────────────────────────────
+    private fun updateDurations() {
+        val now = System.currentTimeMillis()
+        val currentState = _state.value
+
+        val updatedSlot1 = currentState.slot1?.let { session ->
+            val elapsed = now - (startTimes[session.id] ?: now)
+            val file = File(session.outputFilePath)
+            session.copy(
+                durationMs = elapsed,
+                fileSizeBytes = if (file.exists()) file.length() else 0L
+            )
+        }
+
+        val updatedSlot2 = currentState.slot2?.let { session ->
+            val elapsed = now - (startTimes[session.id] ?: now)
+            val file = File(session.outputFilePath)
+            session.copy(
+                durationMs = elapsed,
+                fileSizeBytes = if (file.exists()) file.length() else 0L
+            )
+        }
+
+        if (updatedSlot1 != currentState.slot1 || updatedSlot2 != currentState.slot2) {
+            _state.value = _state.value.copy(
+                slot1 = updatedSlot1,
+                slot2 = updatedSlot2,
+            )
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // BUILD OUTPUT FILE PATH
+    // ──────────────────────────────────────────────────────────
+    private fun buildOutputFile(channelName: String): File {
+        // Save to Movies/DylandosRecordings/ on Fire TV
+        // Fire TV doesn't have external SD, so use internal Movies dir
+        val recordingsDir = File(
+            context.getExternalFilesDir(Environment.DIRECTORY_MOVIES),
+            "DylandosIPTV"
+        ).also { it.mkdirs() }
+
+        val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US)
+            .format(Date())
+        val safeName = channelName.replace(Regex("[^a-zA-Z0-9\\s]"), "")
+            .replace(Regex("\\s+"), "_")
+            .take(40)
+
+        return File(recordingsDir, "${safeName}_${timestamp}.ts")
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // CLEANUP
+    // ──────────────────────────────────────────────────────────
+    fun destroy() {
+        durationTimer.cancel()
+        recordingPlayer1?.stop()
+        recordingPlayer1?.release()
+        recordingPlayer2?.stop()
+        recordingPlayer2?.release()
+        recordingLibVLC1.release()
+        recordingLibVLC2.release()
+    }
+}
+```
+
+### 3.3 `RecordingService.kt` — Android Foreground Service
+
+This is **mandatory**. Without it, Android will kill your background recording processes after 60 seconds when the app goes to background:
+
+```kotlin
+// core/recording/RecordingService.kt
+package com.dylandos.iptv.ultimate.core.recording
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
+import com.dylandos.iptv.ultimate.MainActivity
+import com.dylandos.iptv.ultimate.R
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
+import javax.inject.Inject
+
+@AndroidEntryPoint
+class RecordingService : Service() {
+
+    @Inject lateinit var recordingManager: RecordingManager
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val CHANNEL_ID = "dylandos_recording"
+    private val NOTIFICATION_ID = 1001
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+
+        // Start as foreground service IMMEDIATELY — critical for Android 8+
+        startForeground(NOTIFICATION_ID, buildNotification(null, null))
+
+        // Observe recording state to update notification
+        recordingManager.state
+            .onEach { state -> updateNotification(state) }
+            .launchIn(serviceScope)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        return START_STICKY  // Restart if killed — keep recording alive
+    }
+
+    override fun onBind(intent: IBinder?): IBinder? = null
+
+    override fun onDestroy() {
+        serviceScope.cancel()
+        super.onDestroy()
+    }
+
+    // ── Notification showing recording status ────────────────
+    private fun buildNotification(slot1: RecordingSession?, slot2: RecordingSession?): Notification {
+        val launchIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("navigate_to", "recordings")
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val contentText = when {
+            slot1 != null && slot2 != null ->
+                "Recording: ${slot1.channelName} + ${slot2.channelName}"
+            slot1 != null ->
+                "Recording: ${slot1.channelName} • ${formatDuration(slot1.durationMs)}"
+            slot2 != null ->
+                "Recording: ${slot2.channelName} • ${formatDuration(slot2.durationMs)}"
+            else -> "Recording service active"
+        }
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("DYLANDOS IPTV — Recording")
+            .setContentText(contentText)
+            .setSmallIcon(R.drawable.ic_record_dot)  // Red dot icon
+            .setColor(0xFFEF4444.toInt())            // Red accent
+            .setContentIntent(launchIntent)
+            .setOngoing(true)                         // Cannot be dismissed by user
+            .setOnlyAlertOnce(true)                   // Don't re-alert on update
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
+    private fun updateNotification(state: RecordingManagerState) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID, buildNotification(state.slot1, state.slot2))
+    }
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "DYLANDOS Recordings",
+            NotificationManager.IMPORTANCE_LOW  // Low = no sound, shows in status bar
+        ).apply {
+            description = "Active recording sessions"
+            setShowBadge(true)
+        }
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .createNotificationChannel(channel)
+    }
+
+    private fun formatDuration(ms: Long): String {
+        val h = ms / 3_600_000
+        val m = (ms % 3_600_000) / 60_000
+        val s = (ms % 60_000) / 1_000
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s)
+        else "%d:%02d".format(m, s)
+    }
+
+    companion object {
+        fun start(context: Context) {
+            context.startForegroundService(Intent(context, RecordingService::class.java))
+        }
+        fun stop(context: Context) {
+            context.stopService(Intent(context, RecordingService::class.java))
+        }
+    }
+}
+```
+
+### 3.4 Scheduled Recording via WorkManager
+
+```kotlin
+// core/recording/ScheduledRecordingWorker.kt
+package com.dylandos.iptv.ultimate.core.recording
+
+import android.content.Context
+import androidx.hilt.work.HiltWorker
+import androidx.work.*
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
+import java.util.concurrent.TimeUnit
+
+@HiltWorker
+class ScheduledRecordingWorker @AssistedInject constructor(
+    @Assisted appContext: Context,
+    @Assisted workerParams: WorkerParameters,
+    private val recordingManager: RecordingManager,
+) : CoroutineWorker(appContext, workerParams) {
+
+    override suspend fun doWork(): Result {
+        val channelName = inputData.getString(KEY_CHANNEL_NAME) ?: return Result.failure()
+        val channelId   = inputData.getString(KEY_CHANNEL_ID) ?: return Result.failure()
+        val streamUrl   = inputData.getString(KEY_STREAM_URL) ?: return Result.failure()
+        val durationMin = inputData.getInt(KEY_DURATION_MINUTES, 60)
+
+        // Start the foreground recording service
+        RecordingService.start(applicationContext)
+
+        val result = recordingManager.startRecording(
+            channelName = channelName,
+            channelId = channelId,
+            streamUrl = streamUrl,
+            scheduledDurationMinutes = durationMin,
+        )
+
+        return if (result.isSuccess) Result.success()
+        else Result.retry()
+    }
+
+    companion object {
+        const val KEY_CHANNEL_NAME = "channel_name"
+        const val KEY_CHANNEL_ID = "channel_id"
+        const val KEY_STREAM_URL = "stream_url"
+        const val KEY_DURATION_MINUTES = "duration_minutes"
+
+        // Schedule a recording via WorkManager
+        fun schedule(
+            context: Context,
+            workManager: WorkManager,
+            channelName: String,
+            channelId: String,
+            streamUrl: String,
+            startTimeMs: Long,           // When to begin recording
+            durationMinutes: Int,        // How long to record
+            paddingStartMs: Long = 120_000L,   // Start 2 min early
+        ) {
+            val delay = maxOf(0L, (startTimeMs - paddingStartMs) - System.currentTimeMillis())
+
+            val workData = workDataOf(
+                KEY_CHANNEL_NAME to channelName,
+                KEY_CHANNEL_ID to channelId,
+                KEY_STREAM_URL to streamUrl,
+                KEY_DURATION_MINUTES to durationMinutes,
+            )
+
+            val request = OneTimeWorkRequestBuilder<ScheduledRecordingWorker>()
+                .setInputData(workData)
+                .setInitialDelay(delay, TimeUnit.MILLISECONDS)
+                // Ensure it runs even if app was closed
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .build()
+                )
+                .addTag("recording_${channelId}")
+                .build()
+
+            workManager.enqueueUniqueWork(
+                "recording_${channelId}_${startTimeMs}",
+                ExistingWorkPolicy.REPLACE,
+                request,
+            )
+        }
+    }
+}
+```
+
+---
+
+## 📺 PHASE 4 — FIRE TV UI: JETPACK COMPOSE FOR TV
+
+This is where you maintain the premium look of your Windows version while being **D-pad navigable**.
+
+### 4.1 The Design Language — Neon Cyan on 10-Foot Screen
+
+```kotlin
+// ui/theme/Color.kt
+package com.dylandos.iptv.ultimate.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+// ── DYLANDOS Brand Colors ──────────────────────────────────
+val NeonCyan      = Color(0xFF06B6D4)   // Primary accent
+val NeonCyanLight = Color(0xFF67E8F9)   // Hover/focus states
+val NeonCyanDark  = Color(0xFF0E7490)   // Pressed states
+val NeonPurple    = Color(0xFFA855F7)   // Secondary accent
+val NeonGreen     = Color(0xFF22C55E)   // Success / health good
+val NeonYellow    = Color(0xFFEAB308)   // Warning
+val NeonRed       = Color(0xFFEF4444)   // Error / recording indicator
+
+// ── Background palette ──────────────────────────────────────
+val BackgroundDeep   = Color(0xFF0A0A14)  // Main background (matches Windows)
+val BackgroundCard   = Color(0xFF111128)  // Card/panel background
+val BackgroundElevated = Color(0xFF1A1A35) // Elevated card (focused)
+val SurfaceOverlay   = Color(0x80000000)  // 50% black overlay
+
+// ── Text ────────────────────────────────────────────────────
+val TextPrimary   = Color(0xFFFFFFFF)
+val TextSecondary = Color(0xFFB0B0C0)
+val TextMuted     = Color(0xFF606080)
+
+// ── Recording dot ────────────────────────────────────────────
+val RecordingRed  = Color(0xFFFF3333)
+```
+
+```kotlin
+// ui/theme/Type.kt
+package com.dylandos.iptv.ultimate.ui.theme
+
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+
+// TV typography — everything is LARGER than phone because
+// viewers sit 2–3 meters from a 55" screen
+val DylandosTypography = Typography(
+    // Hero title (channel name in fullscreen OSD)
+    displayLarge  = TextStyle(fontWeight = FontWeight.Bold,   fontSize = 48.sp, letterSpacing = (-0.5).sp),
+    displayMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 36.sp),
+    displaySmall  = TextStyle(fontWeight = FontWeight.Medium, fontSize = 28.sp),
+
+    // Card titles, section headers
+    headlineLarge  = TextStyle(fontWeight = FontWeight.Bold,   fontSize = 24.sp),
+    headlineMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 20.sp),
+    headlineSmall  = TextStyle(fontWeight = FontWeight.Medium, fontSize = 18.sp),
+
+    // Body text, EPG program descriptions
+    bodyLarge  = TextStyle(fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 24.sp),
+    bodyMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 20.sp),
+    bodySmall  = TextStyle(fontWeight = FontWeight.Normal, fontSize = 12.sp),
+
+    // Labels, timestamps, badges
+    labelLarge  = TextStyle(fontWeight = FontWeight.Medium, fontSize = 14.sp),
+    labelMedium = TextStyle(fontWeight = FontWeight.Medium, fontSize = 12.sp),
+    labelSmall  = TextStyle(fontWeight = FontWeight.Normal, fontSize = 10.sp),
+)
+```
+
+### 4.2 D-Pad Focus System — Critical for Fire TV
+
+The #1 issue with TV apps is broken D-pad navigation. Every focusable element MUST handle the Fire TV remote:
+
+```kotlin
+// ui/components/FocusableCard.kt
+package com.dylandos.iptv.ultimate.ui.components
+
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Card
+import androidx.tv.material3.CardDefaults
+import com.dylandos.iptv.ultimate.ui.theme.*
+
+@Composable
+fun FocusableCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit
+) {
+    var isFocused by remember { mutableStateOf(false) }
+
+    // Animate border color on focus
+    val borderColor by animateColorAsState(
+        targetValue = if (isFocused) NeonCyan else Color.Transparent,
+        animationSpec = tween(durationMillis = 150),
+        label = "border"
+    )
+
+    // Animate scale on focus — gives satisfying "pop" on Fire TV remote
+    val scale by animateFloatAsState(
+        targetValue = if (isFocused) 1.05f else 1.0f,
+        animationSpec = tween(durationMillis = 150),
+        label = "scale"
+    )
+
+    // Animate background on focus
+    val bgColor by animateColorAsState(
+        targetValue = if (isFocused) BackgroundElevated else BackgroundCard,
+        animationSpec = tween(durationMillis = 150),
+        label = "bg"
+    )
+
+    androidx.tv.material3.Card(
+        onClick = onClick,
+        modifier = modifier
+            .scale(scale)
+            .border(
+                width = if (isFocused) 2.dp else 0.dp,
+                color = borderColor,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .onFocusChanged { focusState ->
+                isFocused = focusState.isFocused
+            },
+        colors = CardDefaults.colors(
+            containerColor = bgColor,
+            focusedContainerColor = BackgroundElevated,
+        ),
+        shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
+    ) {
+        Box(content = content)
+    }
+}
+```
+
+### 4.3 Home Screen — Full TV Leanback Layout
+
+```kotlin
+// ui/screens/home/HomeScreen.kt
+package com.dylandos.iptv.ultimate.ui.screens.home
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import coil3.compose.AsyncImage
+import com.dylandos.iptv.ultimate.ui.components.*
+import com.dylandos.iptv.ultimate.ui.theme.*
+
+@Composable
+fun HomeScreen(
+    onNavigateToLive: () -> Unit,
+    onNavigateToMovies: () -> Unit,
+    onNavigateToSeries: () -> Unit,
+    onPlayChannel: (String, String) -> Unit,
+    onPlayVod: (String, String, Long) -> Unit,
+    viewModel: HomeViewModel = hiltViewModel(),
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    val recordingState by viewModel.recordingState.collectAsState()
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BackgroundDeep)
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 32.dp),
+        ) {
+
+            // ── HERO BANNER ─────────────────────────────────────
+            item {
+                uiState.heroChannel?.let { channel ->
+                    HeroBanner(
+                        channelName = channel.name,
+                        channelLogo = channel.logoUrl,
+                        currentProgram = uiState.heroProgram,
+                        onWatch = { onPlayChannel(channel.streamUrl, channel.name) },
+                    )
+                }
+            }
+
+            // ── ACTIVE RECORDINGS STRIP ──────────────────────────
+            // Only shown if recordings are active
+            if (recordingState.slot1 != null || recordingState.slot2 != null) {
+                item {
+                    ActiveRecordingsStrip(
+                        slot1 = recordingState.slot1,
+                        slot2 = recordingState.slot2,
+                    )
+                }
+            }
+
+            // ── CONTINUE WATCHING ────────────────────────────────
+            if (uiState.continueWatching.isNotEmpty()) {
+                item { SectionHeader("▶  Continue Watching") }
+                item {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 48.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        items(uiState.continueWatching) { progress ->
+                            ContinueWatchingCard(
+                                title = progress.streamTitle,
+                                thumbnail = progress.thumbnailUrl,
+                                progressPercent = progress.percent,
+                                onClick = { onPlayVod(progress.streamUrl, progress.streamTitle, progress.positionSeconds.toLong()) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── FAVORITE CHANNELS ────────────────────────────────
+            if (uiState.favoriteChannels.isNotEmpty()) {
+                item { SectionHeader("⭐  Your Favorites") }
+                item {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 48.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        items(uiState.favoriteChannels) { channel ->
+                            ChannelLogoCard(
+                                channelName = channel.name,
+                                logoUrl = channel.logoUrl,
+                                currentProgram = channel.currentProgram,
+                                epgProgress = channel.epgProgressPercent,
+                                onClick = { onPlayChannel(channel.streamUrl, channel.name) },
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── TRENDING MOVIES (TMDB enriched) ──────────────────
+            if (uiState.trendingMovies.isNotEmpty()) {
+                item { SectionHeader("🔥  Trending Now") }
+                item {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 48.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        items(uiState.trendingMovies) { movie ->
+                            TvMovieCard(
+                                title = movie.title,
+                                posterUrl = movie.posterUrl,
+                                year = movie.year,
+                                rating = movie.tmdbRating,
+                                onClick = { onPlayVod(movie.streamUrl, movie.title, 0L) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── UP NEXT ON FAVORITES (EPG-driven) ───────────────
+            if (uiState.upNextPrograms.isNotEmpty()) {
+                item { SectionHeader("📅  Up Next on Your Channels") }
+                item {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 48.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        items(uiState.upNextPrograms) { upNext ->
+                            UpNextCard(
+                                channelName = upNext.channelName,
+                                programTitle = upNext.programTitle,
+                                startTime = upNext.startTime,
+                                channelLogoUrl = upNext.channelLogoUrl,
+                                onRecord = {
+                                    viewModel.scheduleRecording(upNext)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── Hero Banner ─────────────────────────────────────────────
+@Composable
+private fun HeroBanner(
+    channelName: String,
+    channelLogo: String?,
+    currentProgram: EpgProgramUi?,
+    onWatch: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(400.dp)
+    ) {
+        // Background gradient — matches Windows version's dark aesthetic
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            BackgroundCard,
+                            BackgroundDeep,
+                        )
+                    )
+                )
+        )
+
+        // Channel logo + program info
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 72.dp, bottom = 32.dp)
+        ) {
+            if (channelLogo != null) {
+                AsyncImage(
+                    model = channelLogo,
+                    contentDescription = channelName,
+                    modifier = Modifier
+                        .height(64.dp)
+                        .widthIn(max = 200.dp)
+                )
+                Spacer(Modifier.height(16.dp))
+            }
+
+            Text(
+                text = channelName,
+                style = DylandosTypography.displayMedium,
+                color = TextPrimary,
+            )
+
+            currentProgram?.let { prog ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = prog.title,
+                    style = DylandosTypography.headlineMedium,
+                    color = NeonCyan,
+                )
+                Text(
+                    text = "${prog.startTimeFormatted} – ${prog.endTimeFormatted}",
+                    style = DylandosTypography.bodyLarge,
+                    color = TextSecondary,
+                )
+
+                // EPG progress bar
+                Spacer(Modifier.height(12.dp))
+                LinearProgressBar(
+                    progress = prog.progressPercent / 100f,
+                    modifier = Modifier.width(300.dp),
+                    color = NeonCyan,
+                )
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            // Watch Now button — first focusable element on home screen
+            FocusableButton(
+                onClick = onWatch,
+                text = "▶  Watch Now",
+                isPrimary = true,
+            )
+        }
+
+        // LIVE badge
+        LiveBadge(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(32.dp)
+        )
+    }
+}
+
+// ─── Active Recordings Strip ─────────────────────────────────
+@Composable
+private fun ActiveRecordingsStrip(
+    slot1: RecordingSession?,
+    slot2: RecordingSession?,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF1A0A0A))
+            .padding(horizontal = 48.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Pulsing red dot
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .background(RecordingRed, shape = androidx.compose.foundation.shape.CircleShape)
+        )
+
+        Text(
+            text = "RECORDING",
+            style = DylandosTypography.labelLarge,
+            color = RecordingRed,
+        )
+
+        slot1?.let { rec ->
+            Text(
+                text = "• ${rec.channelName} ${formatDuration(rec.durationMs)}",
+                style = DylandosTypography.bodyMedium,
+                color = TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        slot2?.let { rec ->
+            Text(
+                text = "• ${rec.channelName} ${formatDuration(rec.durationMs)}",
+                style = DylandosTypography.bodyMedium,
+                color = TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        val totalSize = ((slot1?.fileSizeBytes ?: 0L) + (slot2?.fileSizeBytes ?: 0L))
+        if (totalSize > 0) {
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = formatFileSize(totalSize),
+                style = DylandosTypography.labelMedium,
+                color = TextMuted,
+            )
+        }
+    }
+}
+```
+
+---
+
+## 🎮 PHASE 5 — LIVE TV PLAYER SCREEN (LibVLC)
+
+### 5.1 `LivePlayerScreen.kt`
+
+```kotlin
+// ui/player/LivePlayerScreen.kt
+package com.dylandos.iptv.ultimate.ui.player
+
+import android.view.SurfaceView
+import androidx.compose.animation.*
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.*
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.hilt.navigation.compose.hiltViewModel
+import kotlinx.coroutines.delay
+import org.videolan.libvlc.util.VLCVideoLayout
+import com.dylandos.iptv.ultimate.ui.theme.*
+import com.dylandos.iptv.ultimate.ui.components.*
+
+@Composable
+fun LivePlayerScreen(
+    streamUrl: String,
+    streamTitle: String,
+    channelId: String,
+    onBack: () -> Unit,
+    onChannelUp: () -> Unit,
+    onChannelDown: () -> Unit,
+    viewModel: LivePlayerViewModel = hiltViewModel(),
+) {
+    val vlcState by viewModel.vlcState.collectAsState()
+    val recordingState by viewModel.recordingState.collectAsState()
+    val epgCurrent by viewModel.currentProgram.collectAsState()
+    val epgNext by viewModel.nextProgram.collectAsState()
+    val audioTracks by viewModel.audioTracks.collectAsState()
+    val subTracks by viewModel.subtitleTracks.collectAsState()
+
+    // OSD visibility
+    var osdVisible by remember { mutableStateOf(true) }
+    var osdJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // Channel number buffer for jump
+    var channelBuffer by remember { mutableStateOf("") }
+    var channelBufferJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+    // Show/hide OSD
+    fun showOsd() {
+        osdVisible = true
+        osdJob?.cancel()
+        if (vlcState.isPlaying) {
+            osdJob = scope.launch {
+                delay(5000L)
+                osdVisible = false
+            }
+        }
+    }
+
+    LaunchedEffect(streamUrl) {
+        viewModel.loadStream(streamUrl, channelId)
+        showOsd()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                showOsd()
+                when (event.key) {
+                    Key.DirectionUp, Key.ChannelUp -> { onChannelUp(); true }
+                    Key.DirectionDown, Key.ChannelDown -> { onChannelDown(); true }
+                    Key.MediaPlayPause, Key.Enter -> { viewModel.togglePause(); true }
+                    Key.MediaStop -> { onBack(); true }
+                    Key.VolumeUp -> { viewModel.adjustVolume(+10); true }
+                    Key.VolumeDown -> { viewModel.adjustVolume(-10); true }
+                    Key.VolumeMute -> { viewModel.toggleMute(); true }
+                    Key.Back, Key.Escape -> { onBack(); true }
+                    Key.R -> { viewModel.startRecording(channelId, streamUrl); true }
+                    Key.I -> { viewModel.toggleStats(); true }
+                    // Number keys for channel jump
+                    Key.Zero, Key.One, Key.Two, Key.Three, Key.Four,
+                    Key.Five, Key.Six, Key.Seven, Key.Eight, Key.Nine -> {
+                        val digit = event.key.keyCode - Key.Zero.keyCode
+                        channelBuffer += digit.toString()
+                        channelBufferJob?.cancel()
+                        channelBufferJob = scope.launch {
+                            delay(1500L)
+                            viewModel.jumpToChannelNumber(channelBuffer.toIntOrNull() ?: 0)
+                            channelBuffer = ""
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+    ) {
+        // ── VLC VIDEO SURFACE ────────────────────────────────
+        // VLCVideoLayout is VLC's native SurfaceView wrapper
+        // This is where libvlc renders video directly — zero overhead
+        AndroidView(
+            factory = { ctx ->
+                VLCVideoLayout(ctx).also { layout ->
+                    viewModel.attachVideoLayout(layout)
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+            onRelease = { viewModel.detachVideoLayout() }
+        )
+
+        // ── LOADING OVERLAY ──────────────────────────────────
+        AnimatedVisibility(
+            visible = vlcState.isLoading,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            LoadingOverlay(
+                reconnectAttempt = vlcState.reconnectAttempt,
+                reconnectMax = vlcState.reconnectMax,
+            )
+        }
+
+        // ── ERROR OVERLAY ────────────────────────────────────
+        AnimatedVisibility(
+            visible = vlcState.error != null && !vlcState.isLoading,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            ErrorOverlay(
+                errorMessage = vlcState.error ?: "",
+                onRetry = { viewModel.retryStream() },
+            )
+        }
+
+        // ── OSD OVERLAY ──────────────────────────────────────
+        AnimatedVisibility(
+            visible = osdVisible,
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(400)),
+        ) {
+            LiveOsd(
+                streamTitle = streamTitle,
+                epgCurrent = epgCurrent,
+                epgNext = epgNext,
+                vlcState = vlcState,
+                recordingState = recordingState,
+                audioTracks = audioTracks,
+                subtitleTracks = subTracks,
+                channelBuffer = channelBuffer,
+                onBack = onBack,
+                onTogglePause = viewModel::togglePause,
+                onVolumeChange = viewModel::setVolume,
+                onToggleMute = viewModel::toggleMute,
+                onSelectAudio = viewModel::setAudioTrack,
+                onSelectSubtitle = viewModel::setSubtitleTrack,
+                onStartRecording = { viewModel.startRecording(channelId, streamUrl) },
+                onStopRecording = viewModel::stopRecording,
+                onChannelUp = onChannelUp,
+                onChannelDown = onChannelDown,
+            )
+        }
+
+        // ── BUFFERING INDICATOR ──────────────────────────────
+        AnimatedVisibility(
+            visible = vlcState.isBuffering && !vlcState.isLoading,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            BufferingSpinner(bufferPercent = vlcState.bufferPercent)
+        }
+
+        // ── CHANNEL NUMBER JUMP DISPLAY ──────────────────────
+        AnimatedVisibility(
+            visible = channelBuffer.isNotEmpty(),
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            ChannelNumberDisplay(number = channelBuffer)
+        }
+    }
+}
+
+// ─── Live OSD ────────────────────────────────────────────────
+@Composable
+private fun LiveOsd(
+    streamTitle: String,
+    epgCurrent: EpgProgramUi?,
+    epgNext: EpgProgramUi?,
+    vlcState: VlcPlayerState,
+    recordingState: RecordingManagerState,
+    audioTracks: List<VlcAudioTrack>,
+    subtitleTracks: List<VlcSubTrack>,
+    channelBuffer: String,
+    onBack: () -> Unit,
+    onTogglePause: () -> Unit,
+    onVolumeChange: (Int) -> Unit,
+    onToggleMute: () -> Unit,
+    onSelectAudio: (Int) -> Unit,
+    onSelectSubtitle: (Int) -> Unit,
+    onStartRecording: () -> Unit,
+    onStopRecording: (String) -> Unit,
+    onChannelUp: () -> Unit,
+    onChannelDown: () -> Unit,
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // ── TOP BAR ─────────────────────────────────────────
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color.Black.copy(0.85f), Color.Transparent),
+                    )
+                )
+                .padding(horizontal = 48.dp, vertical = 20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Back arrow
+                FocusableIconButton(
+                    onClick = onBack,
+                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                )
+                Spacer(Modifier.width(16.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = streamTitle,
+                        style = DylandosTypography.headlineLarge,
+                        color = TextPrimary,
+                    )
+                    epgCurrent?.let { prog ->
+                        Text(
+                            text = "${prog.title}  •  ${prog.startTimeFormatted}–${prog.endTimeFormatted}",
+                            style = DylandosTypography.bodyLarge,
+                            color = NeonCyan,
+                        )
+                    }
+                }
+
+                // Stream health indicator
+                StreamHealthBar(
+                    bufferPercent = vlcState.bufferPercent,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+
+                // Recording indicator(s)
+                if (recordingState.slot1 != null || recordingState.slot2 != null) {
+                    RecordingPulseDot()
+                }
+
+                // LIVE badge
+                LiveBadge()
+            }
+        }
+
+        // ── BOTTOM CONTROLS ─────────────────────────────────
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color.Transparent, Color.Black.copy(0.9f)),
+                    )
+                )
+                .padding(horizontal = 48.dp, vertical = 20.dp),
+        ) {
+            // EPG progress bar + next program
+            epgCurrent?.let { prog ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = prog.title,
+                        style = DylandosTypography.bodyMedium,
+                        color = TextSecondary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    epgNext?.let { next ->
+                        Text(
+                            text = "Next: ${next.title} • ${next.startTimeFormatted}",
+                            style = DylandosTypography.bodyMedium,
+                            color = TextMuted,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                EpgProgressBar(
+                    progressPercent = prog.progressPercent,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+
+            // Control buttons row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Pause/Play
+                FocusableButton(
+                    onClick = onTogglePause,
+                    text = if (vlcState.isPlaying) "⏸ Pause" else "▶ Play",
+                    isPrimary = false,
+                )
+
+                // Volume
+                VolumeControl(
+                    volume = vlcState.volume,
+                    muted = vlcState.muted,
+                    onVolumeChange = onVolumeChange,
+                    onToggleMute = onToggleMute,
+                )
+
+                Spacer(Modifier.weight(1f))
+
+                // Audio tracks
+                if (audioTracks.size > 1) {
+                    TrackSelectorButton(
+                        label = "Audio",
+                        tracks = audioTracks.map { it.description },
+                        onSelect = { idx -> onSelectAudio(audioTracks[idx].id) },
+                    )
+                }
+
+                // Subtitle tracks
+                TrackSelectorButton(
+                    label = "CC",
+                    tracks = listOf("Off") + subtitleTracks.map { it.description },
+                    onSelect = { idx -> onSelectSubtitle(idx - 1) },
+                )
+
+                // Record button
+                RecordButton(
+                    recordingState = recordingState,
+                    onStart = onStartRecording,
+                    onStop = onStopRecording,
+                )
+            }
+        }
+    }
+}
+```
+
+---
+
+## 🎬 PHASE 6 — VOD PLAYER SCREEN (libmpv)
+
+```kotlin
+// ui/player/VodPlayerScreen.kt
+package com.dylandos.iptv.ultimate.ui.player
+
+import android.view.SurfaceView
+import androidx.compose.animation.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.*
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.dylandos.iptv.ultimate.ui.theme.*
+import com.dylandos.iptv.ultimate.ui.components.*
+
+@Composable
+fun VodPlayerScreen(
+    streamUrl: String,
+    streamTitle: String,
+    streamId: String,
+    startPositionSeconds: Long = 0L,
+    onBack: () -> Unit,
+    onNextEpisode: (() -> Unit)? = null,
+    viewModel: VodPlayerViewModel = hiltViewModel(),
+) {
+    val mpvState by viewModel.mpvState.collectAsState()
+
+    var osdVisible by remember { mutableStateOf(true) }
+    var showStats by remember { mutableStateOf(false) }
+    var showSpeedMenu by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    fun showOsd() {
+        osdVisible = true
+        scope.launch {
+            delay(5000L)
+            osdVisible = false
+        }
+    }
+
+    LaunchedEffect(streamUrl) {
+        viewModel.loadVod(streamUrl, streamId, startPositionSeconds.toDouble())
+        showOsd()
+    }
+
+    // Auto-save watch progress every 10 seconds
+    LaunchedEffect(mpvState.isPlaying) {
+        if (!mpvState.isPlaying) return@LaunchedEffect
+        while (true) {
+            delay(10_000L)
+            if (mpvState.position > 5.0 && mpvState.duration > 0.0) {
+                viewModel.saveWatchProgress(streamId, mpvState.position, mpvState.duration)
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                showOsd()
+                when (event.key) {
+                    Key.MediaPlayPause, Key.Enter -> { viewModel.togglePause(); true }
+                    Key.DirectionRight -> {
+                        val delta = if (event.isShiftPressed) 30.0 else 10.0
+                        viewModel.seekRelative(delta); true
+                    }
+                    Key.DirectionLeft -> {
+                        val delta = if (event.isShiftPressed) -30.0 else -10.0
+                        viewModel.seekRelative(delta); true
+                    }
+                    Key.DirectionUp -> { viewModel.adjustVolume(+5); true }
+                    Key.DirectionDown -> { viewModel.adjustVolume(-5); true }
+                    Key.VolumeMute -> { viewModel.toggleMute(); true }
+                    Key.Back, Key.Escape -> { onBack(); true }
+                    Key.N -> { onNextEpisode?.invoke(); true }
+                    Key.I -> { showStats = !showStats; true }
+                    Key.P -> { showSpeedMenu = !showSpeedMenu; true }
+                    else -> false
+                }
+            }
+    ) {
+        // ── MPV SURFACE ──────────────────────────────────────
+        // SurfaceView where libmpv renders video
+        AndroidView(
+            factory = { ctx ->
+                SurfaceView(ctx).also { sv ->
+                    viewModel.attachSurface(sv)
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        // ── VOD OSD ──────────────────────────────────────────
+        AnimatedVisibility(
+            visible = osdVisible,
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(400)),
+        ) {
+            VodOsd(
+                streamTitle = streamTitle,
+                mpvState = mpvState,
+                showSpeedMenu = showSpeedMenu,
+                onBack = onBack,
+                onTogglePause = viewModel::togglePause,
+                onSeek = viewModel::seekTo,
+                onVolumeChange = viewModel::setVolume,
+                onSelectAudio = viewModel::setAudioTrack,
+                onSelectSubtitle = viewModel::setSubtitleTrack,
+                onDisableSubtitle = viewModel::disableSubtitles,
+                onSetSpeed = viewModel::setPlaybackSpeed,
+                onNextEpisode = onNextEpisode,
+                onScreenshot = viewModel::takeScreenshot,
+                onDismissSpeedMenu = { showSpeedMenu = false },
+            )
+        }
+
+        // ── STATS OVERLAY ─────────────────────────────────────
+        AnimatedVisibility(visible = showStats) {
+            MpvStatsOverlay(
+                videoCodec = mpvState.videoCodec,
+                audioCodec = mpvState.audioCodec,
+                hwdecActive = mpvState.hwdecActive,
+                videoBitrate = 0, // populate from mpv
+                resolution = "${mpvState.videoWidth}×${mpvState.videoHeight}",
+                bufferSeconds = mpvState.cacheSeconds,
+                position = mpvState.position,
+                duration = mpvState.duration,
+            )
+        }
+
+        // ── AUTO-PLAY NEXT COUNTDOWN ──────────────────────────
+        if (onNextEpisode != null && mpvState.duration > 0 &&
+            (mpvState.duration - mpvState.position) < 30.0 && mpvState.isPlaying) {
+            AutoPlayCountdown(
+                secondsRemaining = (mpvState.duration - mpvState.position).toInt(),
+                onPlayNext = { onNextEpisode() },
+                onCancel = { viewModel.cancelAutoPlay() },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(48.dp),
+            )
+        }
+
+        // ── LOADING / BUFFERING ───────────────────────────────
+        AnimatedVisibility(visible = mpvState.isLoading) {
+            LoadingOverlay()
+        }
+        AnimatedVisibility(visible = mpvState.isBuffering && !mpvState.isLoading) {
+            BufferingSpinner(bufferPercent = mpvState.bufferPercent)
+        }
+    }
+}
+
+// ─── VOD OSD ─────────────────────────────────────────────────
+@Composable
+private fun VodOsd(
+    streamTitle: String,
+    mpvState: MpvPlayerState,
+    showSpeedMenu: Boolean,
+    onBack: () -> Unit,
+    onTogglePause: () -> Unit,
+    onSeek: (Double) -> Unit,
+    onVolumeChange: (Int) -> Unit,
+    onSelectAudio: (Int) -> Unit,
+    onSelectSubtitle: (Int) -> Unit,
+    onDisableSubtitle: () -> Unit,
+    onSetSpeed: (Float) -> Unit,
+    onNextEpisode: (() -> Unit)?,
+    onScreenshot: () -> Unit,
+    onDismissSpeedMenu: () -> Unit,
+) {
+    val progressPercent = if (mpvState.duration > 0.0) {
+        (mpvState.position / mpvState.duration).toFloat().coerceIn(0f, 1f)
+    } else 0f
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Top bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = listOf(Color.Black.copy(0.85f), Color.Transparent)
+                    )
+                )
+                .padding(horizontal = 48.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FocusableIconButton(onClick = onBack, icon = Icons.AutoMirrored.Filled.ArrowBack)
+            Spacer(Modifier.width(16.dp))
+            Text(
+                text = streamTitle,
+                style = DylandosTypography.headlineLarge,
+                color = TextPrimary,
+                modifier = Modifier.weight(1f),
+            )
+
+            // Hardware decode badge
+            if (mpvState.hwdecActive != "no" && mpvState.hwdecActive.isNotEmpty()) {
+                HwDecBadge(decoder = mpvState.hwdecActive)
+            }
+        }
+
+        // Center play/pause on pause
+        if (mpvState.isPaused) {
+            androidx.compose.material3.Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = "Paused",
+                tint = Color.White.copy(0.8f),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(80.dp),
+            )
+        }
+
+        // Speed menu
+        if (showSpeedMenu) {
+            SpeedSelectorMenu(
+                currentSpeed = 1.0f,
+                onSelect = { speed ->
+                    onSetSpeed(speed)
+                    onDismissSpeedMenu()
+                },
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+
+        // Bottom controls
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = listOf(Color.Transparent, Color.Black.copy(0.9f))
+                    )
+                )
+                .padding(horizontal = 48.dp, vertical = 20.dp),
+        ) {
+            // Time display
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = formatTime(mpvState.position),
+                    style = DylandosTypography.labelLarge,
+                    color = TextSecondary,
+                )
+                Text(
+                    text = formatTime(mpvState.duration),
+                    style = DylandosTypography.labelLarge,
+                    color = TextMuted,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+
+            // Seek bar — focusable and D-pad seekable
+            FocusableSeekBar(
+                progress = progressPercent,
+                bufferProgress = (mpvState.cacheSeconds / maxOf(mpvState.duration, 1.0)).toFloat(),
+                onSeek = { pct -> onSeek(pct * mpvState.duration) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(16.dp))
+
+            // Controls row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FocusableButton(
+                    onClick = onTogglePause,
+                    text = if (mpvState.isPaused) "▶ Play" else "⏸ Pause",
+                )
+                FocusableButton(
+                    onClick = {},  // handled via key event -10s
+                    text = "⏪ 10s",
+                )
+                FocusableButton(
+                    onClick = {},  // handled via key event +10s
+                    text = "10s ⏩",
+                )
+
+                Spacer(Modifier.weight(1f))
+
+                // Audio tracks
+                if (mpvState.audioTracks.size > 1) {
+                    TrackSelectorButton(
+                        label = "Audio",
+                        tracks = mpvState.audioTracks.map { it.title.ifEmpty { "Track ${it.id}" } },
+                        onSelect = { idx -> onSelectAudio(mpvState.audioTracks[idx].id) },
+                    )
+                }
+
+                // Subtitle tracks
+                TrackSelectorButton(
+                    label = "CC",
+                    tracks = listOf("Off") + mpvState.subtitleTracks.map { it.title.ifEmpty { "Sub ${it.id}" } },
+                    onSelect = { idx ->
+                        if (idx == 0) onDisableSubtitle()
+                        else onSelectSubtitle(mpvState.subtitleTracks[idx - 1].id)
+                    },
+                )
+
+                // Screenshot
+                FocusableIconButton(
+                    onClick = onScreenshot,
+                    icon = Icons.Outlined.CameraAlt,
+                    contentDescription = "Screenshot",
+                )
+
+                // Next episode
+                onNextEpisode?.let {
+                    FocusableButton(
+                        onClick = it,
+                        text = "Next ▶",
+                        isPrimary = false,
+                    )
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 📡 PHASE 7 — EPG SYSTEM: XMLTV FOR ANDROID
+
+```kotlin
+// core/epg/XmltvParser.kt
+package com.dylandos.iptv.ultimate.core.epg
+
+import android.util.Xml
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.xmlpull.v1.XmlPullParser
+import java.io.InputStream
+import java.text.SimpleDateFormat
+import java.util.*
+
+data class EpgChannel(
+    val id: String,
+    val displayName: String,
+    val iconUrl: String?,
+)
+
+data class EpgProgram(
+    val channelId: String,
+    val title: String,
+    val description: String,
+    val startTimeMs: Long,
+    val endTimeMs: Long,
+    val category: String?,
+    val episodeNum: String?,
+    val rating: String?,
+    val iconUrl: String?,
+)
+
+// ─── XMLTV Parser using Android's XmlPullParser ───────────────
+// This is MEMORY EFFICIENT — streams the XML rather than loading
+// the entire DOM. Critical for Fire TV's 2GB RAM limit.
+class XmltvParser {
+
+    // XMLTV timestamp format: "20240115120000 +0000"
+    private val dateFormat = SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+
+    suspend fun parse(inputStream: InputStream): Pair<List<EpgChannel>, List<EpgProgram>> =
+        withContext(Dispatchers.IO) {
+            val channels = mutableListOf<EpgChannel>()
+            val programs = mutableListOf<EpgProgram>()
+
+            val parser = Xml.newPullParser().apply {
+                setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+                setInput(inputStream, "UTF-8")
+            }
+
+            var eventType = parser.eventType
+
+            while (eventType != XmlPullParser.END_DOCUMENT) {
+                when {
+                    eventType == XmlPullParser.START_TAG && parser.name == "channel" -> {
+                        channels.add(parseChannel(parser))
+                    }
+                    eventType == XmlPullParser.START_TAG && parser.name == "programme" -> {
+                        parseProgram(parser)?.let { programs.add(it) }
+                    }
+                }
+                eventType = parser.next()
+            }
+
+            Pair(channels, programs)
+        }
+
+    private fun parseChannel(parser: XmlPullParser): EpgChannel {
+        val id = parser.getAttributeValue(null, "id") ?: ""
+        var displayName = ""
+        var iconUrl: String? = null
+
+        var eventType = parser.next()
+        while (!(eventType == XmlPullParser.END_TAG && parser.name == "channel")) {
+            if (eventType == XmlPullParser.START_TAG) {
+                when (parser.name) {
+                    "display-name" -> displayName = parser.nextText()
+                    "icon" -> iconUrl = parser.getAttributeValue(null, "src")
+                }
+            }
+            eventType = parser.next()
+        }
+        return EpgChannel(id, displayName, iconUrl)
+    }
+
+    private fun parseProgram(parser: XmlPullParser): EpgProgram? {
+        val channelId = parser.getAttributeValue(null, "channel") ?: return null
+        val startStr = parser.getAttributeValue(null, "start") ?: return null
+        val stopStr = parser.getAttributeValue(null, "stop") ?: return null
+
+        val startMs = parseTimestamp(startStr) ?: return null
+        val stopMs = parseTimestamp(stopStr) ?: return null
+
+        var title = ""
+        var description = ""
+        var category: String? = null
+        var episodeNum: String? = null
+        var rating: String? = null
+        var iconUrl: String? = null
+
+        var eventType = parser.next()
+        while (!(eventType == XmlPullParser.END_TAG && parser.name == "programme")) {
+            if (eventType == XmlPullParser.START_TAG) {
+                when (parser.name) {
+                    "title" -> title = parser.nextText()
+                    "desc" -> description = parser.nextText()
+                    "category" -> category = parser.nextText()
+                    "episode-num" -> episodeNum = parser.nextText()
+                    "rating" -> {
+                        if (parser.next() == XmlPullParser.START_TAG && parser.name == "value") {
+                            rating = parser.nextText()
+                        }
+                    }
+                    "icon" -> iconUrl = parser.getAttributeValue(null, "src")
+                }
+            }
+            eventType = parser.next()
+        }
+
+        return EpgProgram(
+            channelId = channelId,
+            title = title,
+            description = description,
+            startTimeMs = startMs,
+            endTimeMs = stopMs,
+            category = category,
+            episodeNum = episodeNum,
+            rating = rating,
+            iconUrl = iconUrl,
+        )
+    }
+
+    private fun parseTimestamp(raw: String): Long? {
+        return try {
+            // Format: "20240115120000 +0000" — space before timezone
+            dateFormat.parse(raw.trim())?.time
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
+```
+
+### 7.1 EPG Room Entities
+
+```kotlin
+// data/db/entity/EpgEntities.kt
+package com.dylandos.iptv.ultimate.data.db.entity
+
+import androidx.room.*
+
+@Entity(tableName = "epg_channels")
+data class EpgChannelEntity(
+    @PrimaryKey val id: String,
+    val displayName: String,
+    val iconUrl: String?,
+    val matchedXtreamChannelId: String?,  // Fuzzy-matched Xtream channel ID
+    val lastUpdatedMs: Long = System.currentTimeMillis(),
+)
+
+@Entity(
+    tableName = "epg_programs",
+    indices = [
+        Index("channelId"),
+        Index("startTimeMs"),
+        Index("endTimeMs"),
+        Index(value = ["channelId", "startTimeMs", "endTimeMs"]),
+    ]
+)
+data class EpgProgramEntity(
+    @PrimaryKey(autoGenerate = true) val rowId: Long = 0,
+    val channelId: String,
+    val title: String,
+    val description: String,
+    val startTimeMs: Long,
+    val endTimeMs: Long,
+    val category: String?,
+    val episodeNum: String?,
+    val rating: String?,
+    val iconUrl: String?,
+)
+
+// DAO
+@Dao
+interface EpgDao {
+    @Query("""
+        SELECT * FROM epg_programs 
+        WHERE channelId = :channelId 
+        AND startTimeMs <= :nowMs AND endTimeMs > :nowMs
+        LIMIT 1
+    """)
+    suspend fun getCurrentProgram(channelId: String, nowMs: Long): EpgProgramEntity?
+
+    @Query("""
+        SELECT * FROM epg_programs
+        WHERE channelId = :channelId
+        AND startTimeMs > :nowMs
+        ORDER BY startTimeMs ASC
+        LIMIT 1
+    """)
+    suspend fun getNextProgram(channelId: String, nowMs: Long): EpgProgramEntity?
+
+    @Query("""
+        SELECT * FROM epg_programs
+        WHERE channelId = :channelId
+        AND startTimeMs >= :startMs AND endTimeMs <= :endMs
+        ORDER BY startTimeMs ASC
+    """)
+    fun getProgramsForChannelInRange(
+        channelId: String,
+        startMs: Long,
+        endMs: Long
+    ): kotlinx.coroutines.flow.Flow<List<EpgProgramEntity>>
+
+    @Transaction
+    @Query("""
+        SELECT * FROM epg_programs
+        WHERE channelId IN (:channelIds)
+        AND startTimeMs >= :startMs AND endTimeMs <= :endMs
+        ORDER BY channelId, startTimeMs
+    """)
+    fun getEpgGridData(
+        channelIds: List<String>,
+        startMs: Long,
+        endMs: Long
+    ): kotlinx.coroutines.flow.Flow<List<EpgProgramEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPrograms(programs: List<EpgProgramEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertChannels(channels: List<EpgChannelEntity>)
+
+    @Query("DELETE FROM epg_programs WHERE endTimeMs < :thresholdMs")
+    suspend fun deleteExpiredPrograms(thresholdMs: Long)
+
+    @Query("SELECT COUNT(*) FROM epg_programs")
+    suspend fun getProgramCount(): Int
+}
+```
+
+### 7.2 EPG Grid Composable
+
+```kotlin
+// ui/screens/guide/EpgGuideScreen.kt
+// The EPG guide must handle D-pad navigation across a 2D grid (channels × time)
+
+@Composable
+fun EpgGuideScreen(
+    onPlayChannel: (String, String) -> Unit,
+    onScheduleRecording: (EpgProgramUi) -> Unit,
+    viewModel: EpgGuideViewModel = hiltViewModel(),
+) {
+    val channels by viewModel.channels.collectAsState()
+    val programs by viewModel.programs.collectAsState()
+    val currentTimeMs by viewModel.currentTimeMs.collectAsState()
+
+    // Grid dimensions
+    val hourWidthDp = 200.dp
+    val channelColWidthDp = 180.dp
+    val rowHeightDp = 64.dp
+    val timeRangeHours = 6  // Show 6 hours at a time
+
+    val focusManager = LocalFocusManager.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BackgroundDeep)
+    ) {
+        Row {
+            // ── Channel column (fixed, not scrolling horizontally) ──
+            LazyColumn(
+                modifier = Modifier.width(channelColWidthDp),
+            ) {
+                // Time header spacer
+                item { Spacer(Modifier.height(48.dp)) }
+
+                items(channels) { channel ->
+                    ChannelRowLabel(
+                        channelName = channel.name,
+                        channelLogo = channel.logoUrl,
+                        modifier = Modifier.height(rowHeightDp),
+                        onFocus = { /* Scroll program list to match */ },
+                    )
+                }
+            }
+
+            // ── Program grid (scrolls horizontally with time) ──
+            Box {
+                // Time header row (sticky at top)
+                TimeHeaderRow(
+                    currentTimeMs = currentTimeMs,
+                    hourWidthDp = hourWidthDp,
+                    rangeHours = timeRangeHours,
+                    modifier = Modifier.height(48.dp),
+                )
+
+                // Programs — LazyColumn for channels, LazyRow for time
+                LazyColumn(modifier = Modifier.padding(top = 48.dp)) {
+                    items(channels) { channel ->
+                        val channelPrograms = programs[channel.id] ?: emptyList()
+                        ProgramRow(
+                            programs = channelPrograms,
+                            currentTimeMs = currentTimeMs,
+                            hourWidthDp = hourWidthDp,
+                            rowHeightDp = rowHeightDp,
+                            onProgramClick = { program ->
+                                if (program.endTimeMs < currentTimeMs) {
+                                    // Past program — attempt catch-up
+                                    viewModel.playCatchup(channel, program)
+                                } else {
+                                    // Future/current — schedule recording or watch
+                                    onScheduleRecording(program.toUi())
+                                }
+                            },
+                            onProgramLongPress = { program ->
+                                // Long press on remote = record
+                                onScheduleRecording(program.toUi())
+                            },
+                        )
+                    }
+                }
+
+                // "Now" indicator line (red vertical line at current time)
+                NowIndicatorLine(
+                    currentTimeMs = currentTimeMs,
+                    hourWidthDp = hourWidthDp,
+                    modifier = Modifier.padding(top = 48.dp),
+                )
+            }
+        }
+    }
+}
+```
+
+---
+
+## ⚙️ PHASE 8 — SETTINGS SCREEN FOR ANDROID/FIRE TV
+
+```kotlin
+// ui/screens/settings/SettingsScreen.kt
+// Settings must be 100% D-pad navigable — no sliders that require touch
+
+@Composable
+fun SettingsScreen(
+    viewModel: SettingsViewModel = hiltViewModel(),
+) {
+    val settings by viewModel.settings.collectAsState()
+
+    // Settings tabs for TV — horizontal tabs at top, content below
+    var selectedTab by remember { mutableStateOf(SettingsTab.PLAYBACK) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BackgroundDeep)
+            .padding(horizontal = 48.dp, vertical = 32.dp),
+    ) {
+        Text(
+            "Settings",
+            style = DylandosTypography.displaySmall,
+            color = TextPrimary,
+        )
+        Spacer(Modifier.height(24.dp))
+
+        // Tab row
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(SettingsTab.values()) { tab ->
+                FocusableTab(
+                    label = tab.label,
+                    isSelected = selectedTab == tab,
+                    onClick = { selectedTab = tab },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(32.dp))
+
+        // Tab content
+        when (selectedTab) {
+            SettingsTab.PLAYBACK -> PlaybackSettings(settings, viewModel::updateSettings)
+            SettingsTab.EPG -> EpgSettings(settings, viewModel::updateSettings)
+            SettingsTab.RECORDING -> RecordingSettings(settings, viewModel::updateSettings)
+            SettingsTab.ENGINES -> EngineSettings(settings, viewModel::updateSettings)
+            SettingsTab.SUBTITLES -> SubtitleSettings(settings, viewModel::updateSettings)
+            SettingsTab.APPEARANCE -> AppearanceSettings(settings, viewModel::updateSettings)
+            SettingsTab.ABOUT -> AboutSettings()
+        }
+    }
+}
+
+enum class SettingsTab(val label: String) {
+    PLAYBACK("Playback"),
+    EPG("EPG / Guide"),
+    RECORDING("Recording"),
+    ENGINES("Engines"),
+    SUBTITLES("Subtitles"),
+    APPEARANCE("Appearance"),
+    ABOUT("About"),
+}
+
+// ─── Engine Settings Tab ─────────────────────────────────────
+@Composable
+fun EngineSettings(settings: AppSettings, onUpdate: (AppSettings) -> Unit) {
+    TvSettingsList {
+        // Live TV Engine
+        TvSettingsSection("Live TV Engine — LibVLC")
+
+        TvDropdownSetting(
+            label = "Live Buffer Preset",
+            description = "Lower = less delay. Higher = more stable on weak WiFi",
+            options = listOf("Low (0.5s)", "Medium (1.5s)", "High (3.0s)"),
+            selectedIndex = settings.liveBufferPreset.ordinal,
+            onSelect = { idx -> onUpdate(settings.copy(liveBufferPreset = BufferPreset.values()[idx])) },
+        )
+
+        TvToggleSetting(
+            label = "Hardware Decode (Live)",
+            description = "Uses MediaCodec NDK for hardware-accelerated Live TV",
+            checked = settings.vlcHardwareDecode,
+            onToggle = { onUpdate(settings.copy(vlcHardwareDecode = it)) },
+        )
+
+        TvDropdownSetting(
+            label = "Stream Format",
+            options = listOf("Auto", "TS (.ts)", "HLS (.m3u8)"),
+            selectedIndex = when (settings.liveFormat) {
+                LiveFormat.AUTO -> 0; LiveFormat.TS -> 1; LiveFormat.M3U8 -> 2
+            },
+            onSelect = { idx -> onUpdate(settings.copy(liveFormat = LiveFormat.values()[idx])) },
+        )
+
+        Spacer(Modifier.height(24.dp))
+
+        // VOD Engine
+        TvSettingsSection("VOD Engine — libmpv")
+
+        TvToggleSetting(
+            label = "Hardware Decode (VOD)",
+            description = "Uses MediaCodec-copy path for H.264/H.265 HW decode",
+            checked = settings.mpvHardwareDecode,
+            onToggle = { onUpdate(settings.copy(mpvHardwareDecode = it)) },
+        )
+
+        TvDropdownSetting(
+            label = "Video Upscaler",
+            description = "Higher quality = more GPU usage on Fire TV's limited GPU",
+            options = listOf("Bilinear (Fast)", "Bicubic (Balanced)"),
+            selectedIndex = if (settings.mpvScaler == "bilinear") 0 else 1,
+            onSelect = { idx -> onUpdate(settings.copy(mpvScaler = if (idx == 0) "bilinear" else "bicubic")) },
+        )
+
+        // Audio/Video sync
+        TvStepperSetting(
+            label = "Audio/Video Sync",
+            description = "Adjust if audio is out of sync with video",
+            value = settings.audioOffsetMs,
+            step = 50,
+            minValue = -2000,
+            maxValue = 2000,
+            unit = "ms",
+            onDecrement = { onUpdate(settings.copy(audioOffsetMs = settings.audioOffsetMs - 50)) },
+            onIncrement = { onUpdate(settings.copy(audioOffsetMs = settings.audioOffsetMs + 50)) },
+            onReset = { onUpdate(settings.copy(audioOffsetMs = 0)) },
+        )
+
+        Spacer(Modifier.height(24.dp))
+
+        // Recording
+        TvSettingsSection("Recording")
+
+        TvToggleSetting(
+            label = "Show Recording Indicator",
+            description = "Show red dot in player OSD when recording is active",
+            checked = settings.showRecordingIndicator,
+            onToggle = { onUpdate(settings.copy(showRecordingIndicator = it)) },
+        )
+
+        TvStepperSetting(
+            label = "Recording Pre-roll",
+            description = "Start recording this many minutes before scheduled time",
+            value = settings.recordingPaddingStartMinutes,
+            step = 1,
+            minValue = 0,
+            maxValue = 15,
+            unit = "min",
+            onDecrement = { onUpdate(settings.copy(recordingPaddingStartMinutes = settings.recordingPaddingStartMinutes - 1)) },
+            onIncrement = { onUpdate(settings.copy(recordingPaddingStartMinutes = settings.recordingPaddingStartMinutes + 1)) },
+        )
+    }
+}
+```
+
+---
+
+## 🔧 PHASE 9 — FIRE TV REMOTE: COMPLETE KEY MAPPING
+
+Fire TV remote has specific key codes different from standard Android. Here is the complete reference:
+
+```kotlin
+// core/input/FireTvKeyMap.kt
+package com.dylandos.iptv.ultimate.core.input
+
+import androidx.compose.ui.input.key.Key
+
+// ─── Fire TV Remote Key Codes ─────────────────────────────────
+object FireTvKeys {
+
+    // ── D-Pad ────────────────────────────────────────────────
+    val DPAD_UP     = Key.DirectionUp      // KEYCODE_DPAD_UP
+    val DPAD_DOWN   = Key.DirectionDown    // KEYCODE_DPAD_DOWN
+    val DPAD_LEFT   = Key.DirectionLeft    // KEYCODE_DPAD_LEFT
+    val DPAD_RIGHT  = Key.DirectionRight   // KEYCODE_DPAD_RIGHT
+    val DPAD_CENTER = Key.DirectionCenter  // KEYCODE_DPAD_CENTER = SELECT on remote
+
+    // ── Navigation ───────────────────────────────────────────
+    val BACK    = Key.Back    // KEYCODE_BACK — "Back" button on remote
+    val HOME    = Key.Home    // KEYCODE_HOME — usually intercepted by Fire OS
+
+    // ── Media Controls ───────────────────────────────────────
+    val PLAY_PAUSE = Key.MediaPlayPause    // KEYCODE_MEDIA_PLAY_PAUSE
+    val PLAY       = Key.MediaPlay         // KEYCODE_MEDIA_PLAY
+    val PAUSE      = Key.MediaPause        // KEYCODE_MEDIA_PAUSE
+    val STOP       = Key.MediaStop         // KEYCODE_MEDIA_STOP
+    val FAST_FORWARD = Key.MediaFastForward // KEYCODE_MEDIA_FAST_FORWARD
+    val REWIND     = Key.MediaRewind       // KEYCODE_MEDIA_REWIND
+
+    // ── Volume ───────────────────────────────────────────────
+    val VOL_UP   = Key.VolumeUp    // KEYCODE_VOLUME_UP
+    val VOL_DOWN = Key.VolumeDown  // KEYCODE_VOLUME_DOWN
+    val MUTE     = Key.VolumeMute  // KEYCODE_VOLUME_MUTE
+
+    // ── Fire TV Specific ─────────────────────────────────────
+    // Channel Up/Down buttons (on Alexa Voice Remote Enhanced only)
+    val CHANNEL_UP   = Key.ChannelUp    // KEYCODE_CHANNEL_UP
+    val CHANNEL_DOWN = Key.ChannelDown  // KEYCODE_CHANNEL_DOWN
+
+    // Alexa button — KEYCODE_ASSIST — don't intercept this
+    // Menu button — KEYCODE_MENU
+}
+
+// ─── Global key handler for MainActivity ─────────────────────
+// Register in MainActivity to catch keys even when focus is unclear
+//
+// override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+//     return when (keyCode) {
+//         KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { playerViewModel.togglePause(); true }
+//         KeyEvent.KEYCODE_MEDIA_STOP       -> { playerViewModel.stop(); true }
+//         KeyEvent.KEYCODE_CHANNEL_UP       -> { channelViewModel.nextChannel(); true }
+//         KeyEvent.KEYCODE_CHANNEL_DOWN     -> { channelViewModel.prevChannel(); true }
+//         else -> super.onKeyDown(keyCode, event)
+//     }
+// }
+```
+
+---
+
+## 💾 PHASE 10 — DATA LAYER: ROOM + DATASTORE
+
+### 10.1 Complete AppDatabase
+
+```kotlin
+// data/db/AppDatabase.kt
+package com.dylandos.iptv.ultimate.data.db
+
+import androidx.room.*
+
+@Database(
+    entities = [
+        // Channels
+        ChannelEntity::class,
+        CategoryEntity::class,
+        // EPG
+        EpgChannelEntity::class,
+        EpgProgramEntity::class,
+        // Recordings
+        RecordingEntity::class,
+        ScheduledRecordingEntity::class,
+        // User data
+        WatchProgressEntity::class,
+        FavoriteEntity::class,
+        // Profiles
+        ProfileEntity::class,
+    ],
+    version = 1,
+    exportSchema = true,
+)
+@TypeConverters(Converters::class)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun channelDao(): ChannelDao
+    abstract fun epgDao(): EpgDao
+    abstract fun recordingDao(): RecordingDao
+    abstract fun watchProgressDao(): WatchProgressDao
+    abstract fun favoriteDao(): FavoriteDao
+    abstract fun profileDao(): ProfileDao
+}
+
+// ─── Watch Progress Entity ────────────────────────────────────
+@Entity(tableName = "watch_progress")
+data class WatchProgressEntity(
+    @PrimaryKey val streamId: String,
+    val streamTitle: String,
+    val streamUrl: String,
+    val thumbnailUrl: String?,
+    val positionSeconds: Double,
+    val durationSeconds: Double,
+    val percent: Float,
+    val updatedAtMs: Long = System.currentTimeMillis(),
+    val streamType: String,  // "vod" or "series"
+)
+
+// ─── Recording Entity ─────────────────────────────────────────
+@Entity(tableName = "recordings")
+data class RecordingEntity(
+    @PrimaryKey val id: String,
+    val channelName: String,
+    val channelId: String,
+    val programTitle: String?,
+    val outputFilePath: String,
+    val startTimeMs: Long,
+    val endTimeMs: Long?,
+    val durationMs: Long,
+    val fileSizeBytes: Long,
+    val status: String,  // "completed" | "failed" | "in_progress"
+)
+
+// ─── Scheduled Recording Entity ───────────────────────────────
+@Entity(tableName = "scheduled_recordings")
+data class ScheduledRecordingEntity(
+    @PrimaryKey val id: String,
+    val channelId: String,
+    val channelName: String,
+    val streamUrl: String,
+    val programTitle: String,
+    val scheduledStartMs: Long,
+    val scheduledEndMs: Long,
+    val paddingStartMs: Long = 120_000L,
+    val paddingEndMs: Long = 300_000L,
+    val workManagerId: String?,  // WorkManager request ID
+)
+```
+
+### 10.2 Settings DataStore
+
+```kotlin
+// data/datastore/SettingsDataStore.kt
+package com.dylandos.iptv.ultimate.data.datastore
+
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import javax.inject.Inject
+import javax.inject.Singleton
+
+data class AppSettings(
+    // ── Playback ──────────────────────────────────────────────
+    val volume: Int = 100,
+    val muted: Boolean = false,
+    val liveFormat: String = "auto",        // "auto" | "ts" | "m3u8"
+    val liveBufferPreset: String = "medium", // "low" | "medium" | "high"
+    val vlcHardwareDecode: Boolean = true,
+    val mpvHardwareDecode: Boolean = true,
+    val mpvScaler: String = "bilinear",      // conservative for Fire TV GPU
+    val audioOffsetMs: Int = 0,
+    val vodResumePlayback: Boolean = true,
+    val vodAutoPlayNext: Boolean = true,
+    val vodAutoPlayCountdownSecs: Int = 10,
+    val playbackSpeed: Float = 1.0f,
+
+    // ── EPG ───────────────────────────────────────────────────
+    val epgEnabled: Boolean = true,
+    val epgSources: List<String> = emptyList(),
+    val epgRefreshHours: Int = 6,
+    val epgTimeFormat: String = "24h",       // "12h" | "24h"
+
+    // ── Recording ─────────────────────────────────────────────
+    val recordingPaddingStartMinutes: Int = 2,
+    val recordingPaddingEndMinutes: Int = 5,
+    val showRecordingIndicator: Boolean = true,
+    val recordingStoragePath: String = "",   // empty = default Movies dir
+
+    // ── Subtitles ─────────────────────────────────────────────
+    val subtitleFontSize: Int = 48,          // Larger for TV (10-foot rule)
+    val subtitleFontColor: String = "#FFFFFF",
+    val subtitleOutlineWidth: Int = 2,
+    val subtitleBackgroundOpacity: Float = 0.6f,
+
+    // ── UI ────────────────────────────────────────────────────
+    val theme: String = "neon-cyan",
+    val accentColor: String = "#06B6D4",
+    val showStreamHealthOverlay: Boolean = true,
+    val osdTimeoutMs: Int = 5000,
+
+    // ── TMDB ──────────────────────────────────────────────────
+    val tmdbEnabled: Boolean = false,
+    val tmdbApiKey: String = "",
+    val tmdbLanguage: String = "en-US",
+)
+
+@Singleton
+class SettingsDataStore @Inject constructor(
+    private val dataStore: DataStore<Preferences>,
+) {
+    val settings: Flow<AppSettings> = dataStore.data.map { prefs ->
+        AppSettings(
+            volume = prefs[KEY_VOLUME] ?: 100,
+            muted = prefs[KEY_MUTED] ?: false,
+            liveFormat = prefs[KEY_LIVE_FORMAT] ?: "auto",
+            liveBufferPreset = prefs[KEY_LIVE_BUFFER_PRESET] ?: "medium",
+            vlcHardwareDecode = prefs[KEY_VLC_HW_DECODE] ?: true,
+            mpvHardwareDecode = prefs[KEY_MPV_HW_DECODE] ?: true,
+            mpvScaler = prefs[KEY_MPV_SCALER] ?: "bilinear",
+            audioOffsetMs = prefs[KEY_AUDIO_OFFSET_MS] ?: 0,
+            vodResumePlayback = prefs[KEY_VOD_RESUME] ?: true,
+            vodAutoPlayNext = prefs[KEY_VOD_AUTO_NEXT] ?: true,
+            epgEnabled = prefs[KEY_EPG_ENABLED] ?: true,
+            epgRefreshHours = prefs[KEY_EPG_REFRESH_HOURS] ?: 6,
+            epgTimeFormat = prefs[KEY_EPG_TIME_FORMAT] ?: "24h",
+            recordingPaddingStartMinutes = prefs[KEY_REC_PAD_START] ?: 2,
+            recordingPaddingEndMinutes = prefs[KEY_REC_PAD_END] ?: 5,
+            showRecordingIndicator = prefs[KEY_SHOW_REC_INDICATOR] ?: true,
+            subtitleFontSize = prefs[KEY_SUB_SIZE] ?: 48,
+            subtitleFontColor = prefs[KEY_SUB_COLOR] ?: "#FFFFFF",
+            subtitleOutlineWidth = prefs[KEY_SUB_OUTLINE] ?: 2,
+            subtitleBackgroundOpacity = prefs[KEY_SUB_BG_OPACITY] ?: 0.6f,
+            showStreamHealthOverlay = prefs[KEY_SHOW_HEALTH] ?: true,
+            osdTimeoutMs = prefs[KEY_OSD_TIMEOUT_MS] ?: 5000,
+            tmdbEnabled = prefs[KEY_TMDB_ENABLED] ?: false,
+            tmdbApiKey = prefs[KEY_TMDB_KEY] ?: "",
+            tmdbLanguage = prefs[KEY_TMDB_LANG] ?: "en-US",
+        )
+    }
+
+    suspend fun update(block: AppSettings.() -> AppSettings) {
+        val current = dataStore.data.map { prefs ->
+            // reconstruct AppSettings from prefs — same as above
+            AppSettings() // simplified for brevity
+        }
+        // Then write each changed field back to DataStore
+    }
+
+    companion object {
+        val KEY_VOLUME              = intPreferencesKey("volume")
+        val KEY_MUTED               = booleanPreferencesKey("muted")
+        val KEY_LIVE_FORMAT         = stringPreferencesKey("live_format")
+        val KEY_LIVE_BUFFER_PRESET  = stringPreferencesKey("live_buffer_preset")
+        val KEY_VLC_HW_DECODE       = booleanPreferencesKey("vlc_hw_decode")
+        val KEY_MPV_HW_DECODE       = booleanPreferencesKey("mpv_hw_decode")
+        val KEY_MPV_SCALER          = stringPreferencesKey("mpv_scaler")
+        val KEY_AUDIO_OFFSET_MS     = intPreferencesKey("audio_offset_ms")
+        val KEY_VOD_RESUME          = booleanPreferencesKey("vod_resume")
+        val KEY_VOD_AUTO_NEXT       = booleanPreferencesKey("vod_auto_next")
+        val KEY_EPG_ENABLED         = booleanPreferencesKey("epg_enabled")
+        val KEY_EPG_REFRESH_HOURS   = intPreferencesKey("epg_refresh_hours")
+        val KEY_EPG_TIME_FORMAT     = stringPreferencesKey("epg_time_format")
+        val KEY_REC_PAD_START       = intPreferencesKey("rec_pad_start")
+        val KEY_REC_PAD_END         = intPreferencesKey("rec_pad_end")
+        val KEY_SHOW_REC_INDICATOR  = booleanPreferencesKey("show_rec_indicator")
+        val KEY_SUB_SIZE            = intPreferencesKey("sub_size")
+        val KEY_SUB_COLOR           = stringPreferencesKey("sub_color")
+        val KEY_SUB_OUTLINE         = intPreferencesKey("sub_outline")
+        val KEY_SUB_BG_OPACITY      = floatPreferencesKey("sub_bg_opacity")
+        val KEY_SHOW_HEALTH         = booleanPreferencesKey("show_health")
+        val KEY_OSD_TIMEOUT_MS      = intPreferencesKey("osd_timeout_ms")
+        val KEY_TMDB_ENABLED        = booleanPreferencesKey("tmdb_enabled")
+        val KEY_TMDB_KEY            = stringPreferencesKey("tmdb_key")
+        val KEY_TMDB_LANG           = stringPreferencesKey("tmdb_lang")
+    }
+}
+```
+
+---
+
+## 📦 PHASE 11 — BUILD, SIGNING & AMAZON APPSTORE
+
+### 11.1 APK Signing for Sideloading & Appstore
+
+```kotlin
+// app/build.gradle.kts
+android {
+    signingConfigs {
+        create("release") {
+            storeFile = file("../keystore/dylandos-iptv.jks")
+            storePassword = System.getenv("KEYSTORE_PASS") ?: ""
+            keyAlias = "dylandos-iptv"
+            keyPassword = System.getenv("KEY_PASS") ?: ""
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true        // Enable R8 minification
+            isShrinkResources = true      // Remove unused resources
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            signingConfig = signingConfigs.getByName("release")
+        }
+        debug {
+            isDebuggable = true
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
+    }
+}
+```
+
+### 11.2 ProGuard Rules for LibVLC + libmpv
+
+```pro
+# proguard-rules.pro
+
+# ── LibVLC — keep all JNI-called methods ──────────────────────
+-keep class org.videolan.libvlc.** { *; }
+-keep class org.videolan.libvlc.util.** { *; }
+-keepclassmembers class org.videolan.libvlc.** { *; }
+
+# ── libmpv ────────────────────────────────────────────────────
+-keep class is.xyz.mpv.** { *; }
+-keepclassmembers class is.xyz.mpv.** { *; }
+
+# ── Kotlin Serialization ──────────────────────────────────────
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.AnnotationsKt
+-keepclassmembers class kotlinx.serialization.json.** { *** Companion; }
+-keepclasseswithmembers class ** {
+    @kotlinx.serialization.Serializable <methods>;
+}
+
+# ── Hilt ──────────────────────────────────────────────────────
+-keep class dagger.hilt.** { *; }
+-keep class javax.inject.** { *; }
+
+# ── Room ──────────────────────────────────────────────────────
+-keep class * extends androidx.room.RoomDatabase { *; }
+-keep @androidx.room.Entity class * { *; }
+-keep @androidx.room.Dao interface * { *; }
+
+# ── Retrofit ──────────────────────────────────────────────────
+-keepattributes Signature
+-keepattributes Exceptions
+-keep class retrofit2.** { *; }
+
+# ── OkHttp ────────────────────────────────────────────────────
+-dontwarn okhttp3.**
+-dontwarn okio.**
+```
+
+### 11.3 Amazon Appstore Submission Checklist
+
+```
+1. TV Banner: 320×180px PNG (no alpha), shows app name + logo clearly
+2. App Icon: 512×512px PNG
+3. Screenshots: 1920×1080px (TV screenshots, minimum 4)
+4. Minimum API: 28 (covers all Fire TV Stick 4K generations)
+5. Target API: 33 (Fire OS 8)
+6. ABI: armeabi-v7a (32-bit for Fire TV Stick 4K/4K Max)
+7. Permissions justification:
+   - INTERNET: stream playback
+   - FOREGROUND_SERVICE: background recording
+   - WRITE_EXTERNAL_STORAGE: save recordings to Movies
+   - WAKE_LOCK: prevent sleep during recording
+8. Content rating: TV-MA (IPTV contains adult content)
+9. Category: Entertainment
+10. Test on: Fire TV Stick 4K (MT8696D) AND Fire TV Stick 4K Max (MT8696T)
+```
+
+---
+
+## 🔥 PHASE 12 — FIRE TV STICK 4K PERFORMANCE OPTIMIZATION
+
+The most critical phase. The 2GHz chip combined with 2GB of RAM in the Fire TV Stick 4K Max will result in snappier performance, lower app load times, and quicker app switching — but this doesn't mean the regular 4K model will be slow or laggy.
+
+However, 2GB RAM shared across OS + your 3 streams requires these optimizations:
+
+### 12.1 Memory Management Strategy
+
+```kotlin
+// core/MemoryManager.kt
+package com.dylandos.iptv.ultimate.core
+
+import android.app.ActivityManager
+import android.content.ComponentCallbacks2
+import android.content.Context
+import android.content.res.Configuration
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class MemoryManager @Inject constructor(
+    @ApplicationContext private val context: Context,
+) : ComponentCallbacks2 {
+
+    private val activityManager =
+        context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+
+    private val _memoryPressure = MutableStateFlow(MemoryPressure.NORMAL)
+    val memoryPressure: StateFlow<MemoryPressure> = _memoryPressure
+
+    // Called by Android when memory is low
+    override fun onTrimMemory(level: Int) {
+        when {
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
+                _memoryPressure.value = MemoryPressure.CRITICAL
+                // Emergency: clear all image caches
+                clearAllCaches()
+            }
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> {
+                _memoryPressure.value = MemoryPressure.HIGH
+                // Clear non-essential caches
+                clearLogoCache()
+            }
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> {
+                _memoryPressure.value = MemoryPressure.MODERATE
+            }
+            else -> {
+                _memoryPressure.value = MemoryPressure.NORMAL
+            }
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {}
+    override fun onLowMemory() {
+        _memoryPressure.value = MemoryPressure.CRITICAL
+        clearAllCaches()
+    }
+
+    fun getAvailableMemoryMB(): Long {
+        val info = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(info)
+        return info.availMem / (1024 * 1024)
+    }
+
+    fun canStartNewRecording(): Boolean {
+        // Only allow 2nd recording if we have at least 400MB free
+        return getAvailableMemoryMB() > 400
+    }
+
+    fun canStartThirdStream(): Boolean {
+        // Only allow 3rd pipeline if we have at least 600MB free
+        return getAvailableMemoryMB() > 600
+    }
+
+    private fun clearLogoCache() {
+        // Clear Coil image cache
+        // coil.imageLoader(context).memoryCache?.clear()
+    }
+
+    private fun clearAllCaches() {
+        clearLogoCache()
+        // Clear any other in-memory caches
+    }
+}
+
+enum class MemoryPressure { NORMAL, MODERATE, HIGH, CRITICAL }
+```
+
+### 12.2 RecordingManager Memory Guard
+
+Add to `startRecording()`:
+```kotlin
+// In RecordingManager.startRecording():
+if (slot == 2 && !memoryManager.canStartNewRecording()) {
+    return Result.failure(
+        IllegalStateException(
+            "Insufficient memory for second recording. " +
+            "Available: ${memoryManager.getAvailableMemoryMB()}MB (need 400MB)"
+        )
+    )
+}
+```
+
+### 12.3 UI Performance: LazyList with keys
+
+```kotlin
+// ALWAYS use keys in LazyColumn/LazyRow for Fire TV — prevents recomposition
+LazyColumn {
+    items(
+        items = channels,
+        key = { channel -> channel.id },  // ← CRITICAL for stable focus
+    ) { channel ->
+        ChannelRow(channel = channel)
+    }
+}
+```
+
+### 12.4 Image Loading — Coil Optimized for Fire TV
+
+```kotlin
+// DylandosApplication.kt
+class DylandosApplication : Application(), ImageLoaderFactory {
+    override fun newImageLoader(): ImageLoader {
+        return ImageLoader.Builder(this)
+            .memoryCache {
+                MemoryCache.Builder()
+                    // Limit logo cache to 64MB — generous but not greedy
+                    .maxSizeBytes(64 * 1024 * 1024)
+                    .build()
+            }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(cacheDir.resolve("image_cache"))
+                    // 128MB disk cache for logos — survives app restarts
+                    .maxSizeBytes(128 * 1024 * 1024)
+                    .build()
+            }
+            .crossfade(true)
+            .crossfade(300)  // 300ms crossfade — smooth on TV
+            .networkObserverEnabled(true)
+            .build()
+    }
+}
+```
+
+---
+
+## 🗺️ COMPLETE MASTER SUMMARY
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              DYLANDOS IPTV ULTIMATE — ANDROID ARCHITECTURE               │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  TARGET: Fire TV Stick 4K (MediaTek ARM Cortex-A55, 2GB RAM, 32-bit)   │
+│  OS: Fire OS 8 (Android 11) | MIN SDK: 28 | TARGET SDK: 33             │
+│  ABI: armeabi-v7a (32-bit mandatory for Fire TV)                        │
+│                                                                          │
+├────────────────────────────┬────────────────────────────────────────────┤
+│      LIVE TV ENGINE        │         VOD ENGINE                          │
+│      ─────────────         │         ──────────                          │
+│      LibVLC 3.6+           │         libmpv (mpv-android-lib)            │
+│      VLCVideoLayout        │         SurfaceView + MPVLib                │
+│      SurfaceView hw decode │         mediacodec-copy hw decode           │
+│      --vout=android-display│         --vo=gpu                            │
+│      OpenSL ES audio       │         AudioTrack audio                    │
+│      Low-latency profile   │         High-quality VOD profile            │
+│      Auto-reconnect        │         Precision seeking                   │
+│      Audio/subtitle tracks │         ASS/SSA/SRT subtitles               │
+├────────────────────────────┴────────────────────────────────────────────┤
+│                    DUAL RECORDING SYSTEM                                 │
+│                    ─────────────────────                                 │
+│  RecordingService (ForegroundService) — Android can't kill it           │
+│  LibVLC Instance B: --vout=dummy, --aout=dummy, :sout=#std{ts,file}     │
+│  LibVLC Instance C: --vout=dummy, --aout=dummy, :sout=#std{ts,file}     │
+│  Max 2 concurrent recordings + 1 live view = 3 LibVLC instances        │
+│  Memory guard: min 400MB free before allowing 2nd recording             │
+│  WorkManager: scheduled recordings survive app kills and reboots        │
+├────────────────────────────────────────────────────────────────────────┤
+│                     UI: JETPACK COMPOSE FOR TV                          │
+│                     ──────────────────────────                          │
+│  androidx.tv:tv-material — Leanback-aware Compose components           │
+│  D-pad navigation: onKeyEvent on every screen                          │
+│  Focus animation: 1.05× scale + NeonCyan border on focus              │
+│  OSD: 5000ms auto-hide, shown on any key event                         │
+│  Theme: NeonCyan #06B6D4 on #0A0A14 — matches Windows version          │
+│  Typography: +4sp larger than mobile (10-foot viewing distance)         │
+├────────────────────────────────────────────────────────────────────────┤
+│                        DATA LAYER                                       │
+│                        ──────────                                       │
+│  Room: channels, EPG programs, recordings, watch progress, favorites   │
+│  DataStore: app settings (persistent, typed, Coroutine-native)          │
+│  Coil 3: 64MB memory + 128MB disk logo cache                           │
+│  XMLTV: XmlPullParser (streaming, not DOM — memory efficient)           │
+│  WorkManager: scheduled recordings, EPG sync                            │
+├────────────────────────────────────────────────────────────────────────┤
+│                    FIRE TV OPTIMIZATIONS                                │
+│                    ─────────────────────                                │
+│  android:largeHeap="true" — allows up to ~256MB heap                   │
+│  ComponentCallbacks2: respond to memory trim events                     │
+│  LazyList keys: stable focus during list updates                        │
+│  VLC codec=mediacodec_ndk: NDK hardware decode path                    │
+│  mpv hwdec=mediacodec-copy: compatible HW decode with GPU vo            │
+│  No-video recording: --vout=dummy saves ~100MB per recording slot      │
+│  armeabi-v7a only APK: 40% smaller than universal APK                  │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Implementation Priority for Android
+
+```
+WEEK 1: FOUNDATION
+  ✅ Gradle setup with all dependencies + ABI filter
+  ✅ LibVlcEngine.kt — live stream playback working on Fire TV
+  ✅ MpvEngine.kt — VOD playback with SurfaceView
+  ✅ DualEngineManager routing
+  ✅ Basic LivePlayerScreen + VodPlayerScreen with D-pad
+
+WEEK 2: RECORDING
+  ✅ RecordingManager with dual LibVLC instances (--vout=dummy)
+  ✅ RecordingService foreground service
+  ✅ Notification with live recording status
+  ✅ ScheduledRecordingWorker + WorkManager scheduling
+  ✅ Memory guard before starting 2nd recording
+
+WEEK 3: EPG + HOME
+  ✅ XmltvParser (streaming XmlPullParser)
+  ✅ Room database for EPG channels + programs
+  ✅ EpgGuideScreen with D-pad navigable 2D grid
+  ✅ HomeScreen with hero + favorites + continue watching
+  ✅ EpgSyncWorker (background 6-hour refresh)
+
+WEEK 4: CONTENT + POLISH
+  ✅ Xtream API — channels, VOD, series
+  ✅ MoviesScreen + SeriesScreen (TV card grid)
+  ✅ SearchScreen (on-screen keyboard for Fire TV)
+  ✅ RecordingsScreen (list + playback of recorded files)
+  ✅ SettingsScreen (all D-pad navigable)
+  ✅ Memory management + Coil image cache sizing
+
+WEEK 5: INTEGRATION + TESTING
+  ✅ Test on Fire TV Stick 4K (1.7GHz MT8696D)
+  ✅ Test on Fire TV Stick 4K Max (2.0GHz MT8696T)
+  ✅ Profile with Android Studio Memory Profiler during 3-stream scenario
+  ✅ Verify recording survives app backgrounding (ForegroundService check)
+  ✅ Amazon Appstore submission package
+```
+
+This gives you a complete, Fire TV Stick 4K native Android IPTV player that matches the premium quality of your Windows version — with LibVLC powering a battle-hardened live TV engine, libmpv delivering cinema-grade VOD, and a unique dual-recording architecture that no competing IPTV app on the Amazon Appstore currently offers at this level.

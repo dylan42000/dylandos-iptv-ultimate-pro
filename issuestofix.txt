@@ -1,0 +1,13 @@
+1. When in the settings tab scrolling to the right from categories to the end it closes the app for some reason.
+
+2. In movies and tv series when scrolling through catagories on the left and clicking the circle on firestick dpad it changes the media options to that catagory but i cant get out of the catagory section focus to the actual movies or tv series, It usually lets you do the first time but after that you get stuck in catagories area please fix this.
+
+3. Also for all media types not just under movies and tv series if i am in search and select a non live tv option i want to have the media info where it tells the description actors rating etc.
+
+Another issue specifically under the tv series section when you choose a tv series the first series is seasons and i cannot get a focus unless i press the circle in the middle of dpad to arrow over to the episodes or i think even seasons.
+
+Still having the overwhelemd close out issue with when loading tv series mainly movies it loads for 30 seconds and gets overwhelemd and force closes to the main firestick screen.
+
+The option to choose the dvr option under settings to choose the otp or the thumb drive is the only way i was able to get that working so please dont screw with that but when i choose the otp its auto focused on the internal drive for the ui info i want to have it auto save when i choose a new recording option either internal or external so it should auto choose the otp or external and show the storage space and what not.
+
+Also i want to be able to have more customization options to choose each movie or tv series or tv channel as a favorites etc. Give me your best try on making things more customzied.

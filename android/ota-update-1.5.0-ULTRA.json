@@ -1,0 +1,56 @@
+{
+  "versionCode": 15,
+  "versionName": "1.5.0-ULTRA",
+  "apkUrl": "https://www.dropbox.com/scl/fi/YOUR_DROPBOX_LINK_HERE/app-firestick-release.apk?rlkey=YOUR_KEY&st=YOUR_ST&dl=1",
+  "releaseNotes": "v1.5.0-ULTRA: Complete Android overhaul matching Windows version. MPV-first playback with dual buffering profiles: Live TV (low latency, 5s cache) and VOD (deep buffering, 150MB demuxer + 60s cache) to eliminate buffering on 4K MKV. Full D-pad navigation for Firestick 4K with animated focus indicators. Two build variants: Firestick (ARMv7) and Premium (ARM64). New DVR screen with active/completed/scheduled tabs. 100% feature parity with Windows version.",
+  "changelog": [
+    "MPV playback engine with separate Live TV and VOD profiles",
+    "VOD: 150MB demuxer buffer + forced 60s cache (matches Windows fix)",
+    "Live TV: Low-latency 5s cache for real-time streams",
+    "Full D-pad navigation with TvFocusable system",
+    "Animated focus indicators (scale + neon cyan glow)",
+    "DVR screen: Active, Completed, Scheduled recordings",
+    "Two build variants: Firestick (ARMv7) and Premium (ARM64)",
+    "Neon cyan theme matching Windows version",
+    "Optimized for Fire TV Stick 4K (primary target)",
+    "Hardware acceleration: MPV gpu-context android + hwdec auto"
+  ],
+  "requirements": {
+    "minSdk": 21,
+    "targetSdk": 34,
+    "firestickOptimized": true,
+    "mpvRequired": "libmpv-android.aar in libs/ folder",
+    "recommendedDevices": [
+      "Fire TV Stick 4K",
+      "Fire TV Stick Lite",
+      "Fire TV Cube",
+      "NVIDIA Shield",
+      "Chromecast with Google TV"
+    ]
+  },
+  "buildVariants": {
+    "firestick": {
+      "abi": "armeabi-v7a",
+      "target": "Fire TV Stick 4K",
+      "apkUrl": "https://www.dropbox.com/scl/fi/YOUR_FIRESTICK_LINK/app-firestick-release.apk?rlkey=YOUR_KEY&st=YOUR_ST&dl=1"
+    },
+    "premium": {
+      "abi": "arm64-v8a",
+      "target": "High-end Android devices",
+      "apkUrl": "https://www.dropbox.com/scl/fi/YOUR_PREMIUM_LINK/app-premium-release.apk?rlkey=YOUR_KEY&st=YOUR_ST&dl=1"
+    }
+  },
+  "installation": {
+    "firestick": [
+      "Enable 'Apps from Unknown Sources' in Fire TV settings",
+      "Install 'Downloader' app from Amazon App Store",
+      "Enter APK URL in Downloader",
+      "Install and launch DYLANDOS IPTV ULTIMATE"
+    ],
+    "adb": [
+      "Enable ADB debugging on Fire TV",
+      "Connect: adb connect <firestick-ip>:5555",
+      "Install: adb install -r app-firestick-release.apk"
+    ]
+  }
+}

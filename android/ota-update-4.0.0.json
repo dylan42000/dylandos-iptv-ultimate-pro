@@ -1,0 +1,17 @@
+{
+  "versionCode": 48,
+  "versionName": "4.0.0",
+  "releaseNotes": "v4.0.0: Major quality & performance overhaul. \n\n🔧 FIXES:\n• D-pad focus lock resolved — returning from movie detail no longer traps focus on category rail\n• Movie info 'no info detected' fixed — VodInfo now cached (15-min TTL) with 3-attempt retry; server rate-limiting no longer causes blank detail screens\n• Live TV channel lag/freeze fixed — EPG batch loading capped at 40 channels on category switch; viewport-driven incremental loading prevents server request storms\n• EPG batch concurrency reduced (20→10 per chunk, 100ms→200ms delay) preventing OkHttp pool saturation\n• Category item keys added — focus and scroll state preserved across category switches\n• Poster grid item keys added — no more full recompose on category change\n\n⚡ PERFORMANCE:\n• VOD buffer reduced from 8s to 5s — faster movie start on Firestick 4K\n• VLC --http-reconnect added — auto-recovers stalled HLS segments without user intervention\n• VOD/Series cache TTL extended 5min→15min — no more loading spinner while browsing\n• OkHttp readTimeout reduced 60s→30s — prevents 1-minute UI freeze on stalled API calls\n• Poster animation changed from spring to tween(120ms) — eliminates D-pad navigation frame drops\n• Poster disk cache keyed by stream ID — CDN URL rotation no longer causes re-downloads\n\n🎬 MOVIE DETAIL:\n• 'RELOAD INFO' button added when server returns empty metadata\n• Retry automatically on transient network failures (up to 3 attempts with backoff)",
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_LINK/app-firestick-release.apk?dl=1",
+      "apkSha256": "24cb8410251d9e6a72c4cacdc7a9a0b6b34247e3780224b30978f6c4a6fd4528",
+      "apkSizeBytes": 59171669
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_PREMIUM_LINK/app-premium-release.apk?dl=1",
+      "apkSha256": "REPLACE_WITH_SHA256_AFTER_BUILD",
+      "apkSizeBytes": 0
+    }
+  }
+}

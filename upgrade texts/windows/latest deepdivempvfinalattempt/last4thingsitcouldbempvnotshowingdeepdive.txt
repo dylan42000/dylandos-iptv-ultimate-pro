@@ -1,0 +1,1151 @@
+# DYLANDOS IPTV ULTIMATE — Black Screen Debug Master Guide
+### "Video Is Playing But Hidden" — All Root Causes & Every Fix
+
+---
+
+## 🔴 UNDERSTAND THE EXACT PROBLEM FIRST
+
+You said:
+> Audio plays, stream details show it's active, but screen is **black**
+
+This tells us with certainty:
+- ✅ MPV process is alive and decoding
+- ✅ The backing window exists
+- ✅ The stream URL is valid
+- ❌ **The visual pathway between MPV → backing window → transparent main window → your eyes is broken**
+
+There are exactly **3 layers** that can cause this and only this symptom. Every fix below targets one of them.
+
+```
+┌─────────────────────────────────────────────┐
+│  LAYER 3: React Main Window (transparent)   │  ← Could be opaque/black
+│  [ OSD controls, menus, overlays ]          │
+├─────────────────────────────────────────────┤
+│  LAYER 2: MPV Backing Window (opaque black) │  ← MPV renders here
+│  [ Actual video frames drawn by MPV/D3D11 ] │
+├─────────────────────────────────────────────┤
+│  LAYER 1: Desktop / Windows compositor      │
+└─────────────────────────────────────────────┘
+```
+
+**The bug:** Somewhere in Layer 3, the "hole" that should show Layer 2 through is filled in with black.
+
+---
+
+## 🔍 DIAGNOSIS CHECKLIST — RUN THESE FIRST
+
+Open DevTools in your Electron app (`Ctrl+Shift+I`) while the black screen is showing:
+
+```javascript
+// Paste this entire block into the DevTools console:
+(function diagnoseTransparency() {
+  const checks = [];
+  
+  // Check 1: html element background
+  const html = document.documentElement;
+  const htmlBg = getComputedStyle(html).backgroundColor;
+  checks.push({ name: 'html background', value: htmlBg, 
+    ok: htmlBg === 'rgba(0, 0, 0, 0)' || htmlBg === 'transparent' });
+  
+  // Check 2: body background
+  const body = document.body;
+  const bodyBg = getComputedStyle(body).backgroundColor;
+  checks.push({ name: 'body background', value: bodyBg,
+    ok: bodyBg === 'rgba(0, 0, 0, 0)' || bodyBg === 'transparent' });
+  
+  // Check 3: root div background
+  const root = document.getElementById('root');
+  if (root) {
+    const rootBg = getComputedStyle(root).backgroundColor;
+    checks.push({ name: '#root background', value: rootBg,
+      ok: rootBg === 'rgba(0, 0, 0, 0)' || rootBg === 'transparent' });
+  }
+  
+  // Check 4: Find the player container
+  const playerEl = document.querySelector('[data-player]') || 
+                   document.querySelector('.player-container') ||
+                   document.querySelector('[class*="player"]');
+  if (playerEl) {
+    const playerBg = getComputedStyle(playerEl).backgroundColor;
+    checks.push({ name: 'player element bg', value: playerBg,
+      ok: playerBg === 'rgba(0, 0, 0, 0)' || playerBg === 'transparent' });
+  }
+  
+  // Check 5: Find any element with a solid black or opaque background 
+  //          that is covering a large area
+  const allEls = document.querySelectorAll('*');
+  const suspiciousEls = [];
+  allEls.forEach(el => {
+    const rect = el.getBoundingClientRect();
+    const area = rect.width * rect.height;
+    if (area < 50000) return; // Skip small elements
+    const bg = getComputedStyle(el).backgroundColor;
+    const opacity = parseFloat(getComputedStyle(el).opacity);
+    const isBlack = bg === 'rgb(0, 0, 0)' || bg === 'rgba(0, 0, 0, 1)';
+    const isOpaque = !bg.includes('rgba') || bg.endsWith(', 1)');
+    if (isBlack && isOpaque && opacity > 0.8) {
+      suspiciousEls.push({ 
+        tag: el.tagName, 
+        class: el.className?.toString().slice(0, 60),
+        bg, 
+        area: Math.round(area),
+        rect: { w: Math.round(rect.width), h: Math.round(rect.height), x: Math.round(rect.x), y: Math.round(rect.y) }
+      });
+    }
+  });
+  
+  console.log('=== TRANSPARENCY DIAGNOSIS ===');
+  checks.forEach(c => console.log(c.ok ? '✅' : '❌', c.name, '→', c.value));
+  console.log('\n=== SUSPICIOUS BLACK ELEMENTS (large + opaque + black) ===');
+  if (suspiciousEls.length === 0) {
+    console.log('None found — problem is likely Electron window config');
+  } else {
+    suspiciousEls.sort((a,b) => b.area - a.area).slice(0, 10).forEach(e => console.log(e));
+  }
+  
+  return { checks, suspiciousEls };
+})();
+```
+
+**Read the output:**
+- Any `❌` = CSS is blocking transparency → fix in Section 1
+- Suspicious elements found = React component has wrong background → fix in Section 2
+- All `✅` and nothing suspicious = Electron window config issue → fix in Section 3
+
+---
+
+# SECTION 1: CSS TRANSPARENCY FIXES
+
+---
+
+## Fix 1A — Global CSS Must Have Zero Background
+
+**File: `src/index.css` (or whatever your global CSS entry is)**
+
+```css
+/* These MUST be here. Any background on html/body blocks the MPV window. */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent !important;
+  background-color: transparent !important;
+  overflow: hidden;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  background: transparent !important;
+  background-color: transparent !important;
+  overflow: hidden;
+}
+```
+
+**File: `index.html`**
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DYLANDOS IPTV ULTIMATE</title>
+  <!--
+    CRITICAL: No background-color style tag here.
+    No <style>body { background: black; }</style>
+    This will override everything and block the MPV window.
+  -->
+</head>
+<!-- CRITICAL: No style attribute here. No bgcolor attribute. -->
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
+```
+
+---
+
+## Fix 1B — Tailwind Base Layer Override
+
+Tailwind's `@tailwind base` injects `background-color` resets that can break transparency.
+
+**File: `src/index.css`**
+
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 
+  OVERRIDE Tailwind base after the @tailwind base import.
+  Tailwind's Preflight sets background on html — kill it here.
+*/
+html {
+  background-color: transparent !important;
+}
+
+body {
+  background-color: transparent !important;
+  /* 
+    Tailwind Preflight also does: line-height: 1.5
+    That's fine. But background must be transparent.
+  */
+}
+```
+
+**Alternative — disable Tailwind Preflight entirely in `tailwind.config.ts`:**
+
+```javascript
+// tailwind.config.ts
+export default {
+  corePlugins: {
+    preflight: false,   // Disables Tailwind's base CSS reset entirely
+                        // You then control ALL base styles yourself
+  },
+  content: ['./src/**/*.{ts,tsx}'],
+  theme: { extend: {} },
+  plugins: [],
+};
+```
+
+---
+
+## Fix 1C — The Player Container Must Not Have `bg-black` or `bg-gray-*`
+
+**File: `src/components/MpvPlayer.tsx`**
+
+Find your outermost container div. It probably looks something like:
+
+```tsx
+// ❌ WRONG — this creates a black box that covers MPV:
+<div className="relative w-full h-full bg-black">
+
+// ❌ WRONG — bg-gray-900 is nearly black, will block MPV:
+<div className="relative w-full h-full bg-gray-900">
+
+// ❌ WRONG — inline style with background:
+<div style={{ background: '#000', width: '100%', height: '100%' }}>
+
+// ✅ CORRECT — no background, fully transparent:
+<div className="relative w-full h-full">
+
+// ✅ CORRECT — explicitly transparent:
+<div className="relative w-full h-full" style={{ backgroundColor: 'transparent' }}>
+```
+
+**Full corrected MpvPlayer outer shell:**
+
+```tsx
+// src/components/MpvPlayer.tsx
+
+export function MpvPlayer({ /* your props */ }: MpvPlayerProps) {
+  return (
+    // OUTER WRAPPER: Must be transparent. This sits over the MPV backing window.
+    // ANY background here = black screen.
+    <div
+      className="relative w-full h-full"
+      style={{
+        backgroundColor: 'transparent',  // belt
+        background: 'transparent',        // suspenders
+      }}
+    >
+      {/* Loading overlay — only shown when actually loading, not permanently */}
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center
+                        bg-black/40 backdrop-blur-sm z-10">
+          <LoadingSpinner />
+        </div>
+      )}
+
+      {/* Error overlay — only shown on error */}
+      {hasError && (
+        <div className="absolute inset-0 flex items-center justify-center
+                        bg-black/70 z-20">
+          <ErrorDisplay error={error} />
+        </div>
+      )}
+
+      {/* Controls — transparent background, only visible on hover */}
+      {/* These must NOT have full-coverage black backgrounds */}
+      <PlayerControls visible={controlsVisible} />
+    </div>
+  );
+}
+```
+
+---
+
+## Fix 1D — VideoPlayerEngine Container
+
+**File: `src/components/VideoPlayerEngine.tsx`**
+
+```tsx
+// src/components/VideoPlayerEngine.tsx
+
+export function VideoPlayerEngine({ stream, streamType, onClose }: VideoPlayerEngineProps) {
+  const isMpv = useMpvPreferred();
+  
+  return (
+    // CRITICAL: This container MUST be transparent
+    // It is the "hole" through which MPV video shows
+    <div
+      className="fixed inset-0 z-50"
+      style={{
+        backgroundColor: 'transparent',
+        background: 'transparent',
+        // Do NOT add: background-color: black
+        // Do NOT add: bg-black in className
+      }}
+    >
+      {isMpv ? (
+        <MpvPlayer
+          stream={stream}
+          streamType={streamType}
+          onClose={onClose}
+        />
+      ) : (
+        // HLS fallback — this one CAN have a black background since it
+        // renders a real <video> element, not the MPV backing window
+        <div className="w-full h-full bg-black">
+          <VideoPlayer stream={stream} streamType={streamType} />
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## Fix 1E — Page-Level Containers
+
+**File: `src/pages/LiveTVPage.tsx` and `src/pages/MoviesPage.tsx`**
+
+When the player is open, the page that launched it might still render behind it with a solid background:
+
+```tsx
+// In LiveTVPage.tsx, the player fullscreen overlay:
+// ❌ WRONG:
+{isPlayerOpen && (
+  <div className="fixed inset-0 z-50 bg-black">
+    <VideoPlayerEngine ... />
+  </div>
+)}
+
+// ✅ CORRECT:
+{isPlayerOpen && (
+  // No background on this wrapper — let VideoPlayerEngine handle it
+  <div className="fixed inset-0 z-50">
+    <VideoPlayerEngine ... />
+  </div>
+)}
+```
+
+---
+
+# SECTION 2: ELECTRON WINDOW CONFIGURATION FIXES
+
+---
+
+## Fix 2A — BrowserWindow Must Have Correct Transparency Config
+
+**File: `electron/main.cjs`**
+
+This is the most likely root cause for "was working then broke":
+
+```javascript
+// electron/main.cjs
+
+function createMainWindow() {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 720,
+    
+    // ── TRANSPARENCY — ALL THREE OF THESE ARE REQUIRED ──────────
+    transparent: true,
+    backgroundColor: '#00000000',   // ← CRITICAL: 8-char hex with 00 alpha
+                                     // '#000000' (6 char) = OPAQUE BLACK = black screen
+                                     // '#00000000' (8 char) = transparent
+    // ────────────────────────────────────────────────────────────
+    
+    frame: false,
+    titleBarStyle: 'hidden',
+    hasShadow: false,               // shadows break transparency on Windows
+    
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      // Do NOT set backgroundThrottling: false here — not related
+    },
+    
+    show: false,  // hidden until ready-to-show
+  });
+  
+  // ── CRITICAL: Set background color explicitly after creation too ──
+  win.setBackgroundColor('#00000000');
+  
+  win.once('ready-to-show', () => {
+    win.show();
+  });
+  
+  return win;
+}
+```
+
+**Verify your current value:** Search `electron/main.cjs` for `backgroundColor`. It must be `'#00000000'` (8 chars). If it's `'#000000'` (6 chars), that's your bug.
+
+---
+
+## Fix 2B — Chromium Flags for Transparent Windows on Windows
+
+**File: `electron/main.cjs` — before `app.whenReady()`**
+
+```javascript
+// electron/main.cjs — at the very top, before anything else
+
+// These must be set BEFORE app is ready:
+app.commandLine.appendSwitch('enable-transparent-visuals');
+
+// These prevent GPU compositing from breaking the transparent window:
+app.commandLine.appendSwitch('disable-gpu-compositing');  
+// ^^^ WARNING: This disables GPU compositing for Chromium (not MPV).
+// MPV still uses D3D11. This only affects the Electron overlay window.
+// Try this first — it fixes transparency on many Windows configs.
+
+// If disable-gpu-compositing causes other issues, try these instead:
+// app.commandLine.appendSwitch('enable-gpu-rasterization');
+// app.commandLine.appendSwitch('use-gl', 'desktop');
+
+// Force software rendering for the transparent overlay window only:
+// app.commandLine.appendSwitch('disable-software-rasterizer'); // removes SW fallback
+// app.commandLine.appendSwitch('in-process-gpu');
+```
+
+**Full recommended flag set for transparent-window IPTV apps:**
+
+```javascript
+// electron/main.cjs — full startup flag block
+
+// Call all of these BEFORE app.whenReady()
+
+// Transparency
+app.commandLine.appendSwitch('enable-transparent-visuals');
+
+// Prevent color management from altering transparency
+app.commandLine.appendSwitch('disable-color-correct-rendering');
+
+// Hardware media features — needed for MPV's D3D11 surface sharing
+app.commandLine.appendSwitch('enable-features', 
+  'SharedImageForWebGL,VaapiVideoDecodeLinuxGL');
+
+// Disable GPU sandbox — prevents D3D11 surface access issues
+app.commandLine.appendSwitch('disable-gpu-sandbox');
+
+// These help on some Windows driver configurations:
+app.commandLine.appendSwitch('disable-direct-composition');
+// ^^^ Try with and without this. Some Windows setups NEED it,
+// others BREAK with it. Test both states.
+```
+
+---
+
+## Fix 2C — The `show`/`hide` Video Window Logic Race Condition
+
+This is a very common cause of "was working then broke after a few instances."
+
+**File: `electron/main.cjs`** — look at your `mpv:show-video-window` and `mpv:hide-video-window` handlers:
+
+```javascript
+// electron/main.cjs
+
+// ❌ BROKEN PATTERN — hide sets position off-screen, 
+//    then show tries to restore but gets race condition:
+ipcMain.handle('mpv:hide-video-window', () => {
+  if (mpvVideoWindow) {
+    mpvVideoWindow.setPosition(-10000, -10000); // ← Race condition prone
+  }
+});
+
+ipcMain.handle('mpv:show-video-window', () => {
+  if (mpvVideoWindow && mainWindow) {
+    const bounds = mainWindow.getBounds();
+    mpvVideoWindow.setPosition(bounds.x, bounds.y); // ← May restore to wrong position
+  }
+});
+```
+
+```javascript
+// ✅ CORRECT PATTERN — use opacity and a proper hide state flag:
+
+let mpvWindowShouldBeVisible = false;
+
+ipcMain.handle('mpv:hide-video-window', () => {
+  mpvWindowShouldBeVisible = false;
+  if (mpvVideoWindow && !mpvVideoWindow.isDestroyed()) {
+    // Move behind everything rather than off-screen:
+    mpvVideoWindow.setAlwaysOnTop(false);
+    // Keep the window in position but hide it behind main:
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setAlwaysOnTop(true);
+      mainWindow.setAlwaysOnTop(false);
+    }
+    // Optional: minimize opacity by moving it fully behind
+    // Don't move position — that causes layout glitches
+  }
+});
+
+ipcMain.handle('mpv:show-video-window', () => {
+  mpvWindowShouldBeVisible = true;
+  if (mpvVideoWindow && !mpvVideoWindow.isDestroyed() && 
+      mainWindow && !mainWindow.isDestroyed()) {
+    // Ensure correct z-order:
+    syncMpvWindowBounds();
+    mpvVideoWindow.showInactive();
+    // Bring main window back to front (with OSD on top):
+    mainWindow.focus();
+  }
+});
+
+function syncMpvWindowBounds() {
+  if (!mpvVideoWindow || mpvVideoWindow.isDestroyed()) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  
+  const bounds = mainWindow.getBounds();
+  mpvVideoWindow.setBounds(bounds);
+  
+  // Z-order: MPV backing window must be BELOW main window
+  // setAlwaysOnTop with level ensures this on Windows:
+  mpvVideoWindow.setAlwaysOnTop(false);
+  mainWindow.focus(); // Brings main to top of Z-stack
+}
+```
+
+---
+
+## Fix 2D — Z-Order After Alt-Tab / Focus Loss
+
+**File: `electron/main.cjs`**
+
+The focus handler you mentioned in section 4.4 — this is where transparency breaks most often:
+
+```javascript
+// electron/main.cjs — replace your existing focus handler
+
+mainWindow.on('focus', () => {
+  // When window regains focus, the Windows compositor may have 
+  // re-ordered the Z stack. Fix it:
+  if (mpvWindowShouldBeVisible && mpvVideoWindow && !mpvVideoWindow.isDestroyed()) {
+    // Step 1: Assert MPV window is NOT always-on-top
+    mpvVideoWindow.setAlwaysOnTop(false);
+    
+    // Step 2: Briefly make main window always-on-top to force Z reassertion
+    mainWindow.setAlwaysOnTop(true);
+    
+    // Step 3: Release always-on-top so other windows can go above it normally
+    // Use a small delay — Windows DWM needs one frame to process the Z change
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.setAlwaysOnTop(false);
+      }
+    }, 50);
+  }
+});
+
+mainWindow.on('blur', () => {
+  // When losing focus, don't change Z order.
+  // The MPV window should stay where it is.
+  // Moving it on blur causes the "came back and now it's wrong" bug.
+});
+
+// Also fix this on restore from minimize:
+mainWindow.on('restore', () => {
+  if (mpvVideoWindow && !mpvVideoWindow.isDestroyed()) {
+    mpvVideoWindow.showInactive();
+    syncMpvWindowBounds();
+    setTimeout(() => {
+      if (mpvVideoWindow && !mpvVideoWindow.isDestroyed()) {
+        mpvVideoWindow.showInactive();
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.focus();
+      }
+    }, 100);
+  }
+});
+```
+
+---
+
+## Fix 2E — MPV Backing Window Creation — Full Correct Config
+
+**File: `electron/main.cjs`**
+
+```javascript
+// electron/main.cjs
+
+function createMpvVideoWindow(parentWindow) {
+  const parentBounds = parentWindow.getBounds();
+  
+  const mpvWin = new BrowserWindow({
+    // Match parent window exactly:
+    x: parentBounds.x,
+    y: parentBounds.y,
+    width: parentBounds.width,
+    height: parentBounds.height,
+    
+    // Visual config:
+    backgroundColor: '#000000',    // OPAQUE black — this is intentional
+                                   // MPV renders video onto this surface
+    transparent: false,            // NOT transparent — it's the video surface
+    
+    // Window chrome:
+    frame: false,
+    titleBarStyle: 'hidden',
+    
+    // Behavior:
+    focusable: false,              // Can't steal focus from main window
+    skipTaskbar: true,             // Don't show in taskbar
+    show: false,                   // Hidden until MPV is ready
+    hasShadow: false,
+    
+    // CRITICAL: No webPreferences needed — this window loads a blank page
+    // or no page at all. It only exists for its HWND.
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+    
+    // Parent relationship:
+    // parent: parentWindow,   // ← DO NOT set parent here
+    // Setting parent causes the backing window to be a child window,
+    // which changes DWM compositing behavior and can cause black screen.
+    // Keep both as independent top-level windows.
+  });
+  
+  // Load a minimal blank page — don't leave it unloaded:
+  mpvWin.loadURL('about:blank');
+  
+  // Sync bounds whenever parent moves or resizes:
+  const syncBounds = () => {
+    if (mpvWin.isDestroyed()) return;
+    const b = parentWindow.getBounds();
+    mpvWin.setBounds(b);
+  };
+  
+  parentWindow.on('move', syncBounds);
+  parentWindow.on('resize', syncBounds);
+  
+  return mpvWin;
+}
+```
+
+---
+
+# SECTION 3: MPV STARTUP ARG FIXES
+
+---
+
+## Fix 3A — Video Output Arguments That Can Cause Black Screen
+
+**File: `electron/mpvManager.cjs`**
+
+Some `--vo` and `--gpu-api` combinations cause MPV to render to the surface but have it composited incorrectly on Windows. Test each of these:
+
+```javascript
+// electron/mpvManager.cjs
+
+// Test Option 1 — RECOMMENDED FIRST TRY:
+// gpu-next with d3d11 is the most compatible on modern Windows
+const baseArgs = [
+  '--vo=gpu-next',
+  '--gpu-api=d3d11',
+  '--hwdec=auto-safe',     // NOT 'auto' — 'auto-safe' won't crash on bad codec
+  `--wid=${hwnd}`,
+  '--idle=yes',
+  '--keep-open=yes',
+  '--no-border',
+  '--no-osc',
+  '--no-osd-bar',
+  `--input-ipc-server=\\\\.\\pipe\\dylandos-mpv-ipc`,
+];
+
+// Test Option 2 — if Option 1 still shows black:
+// Force the older gpu renderer
+const baseArgsOption2 = [
+  '--vo=gpu',
+  '--gpu-api=d3d11',
+  '--hwdec=d3d11va',
+  `--wid=${hwnd}`,
+  '--idle=yes',
+  '--keep-open=yes',
+  '--no-border',
+  '--no-osc',
+];
+
+// Test Option 3 — if GPU renderer is the issue, use software VO:
+// This ALWAYS works but no hardware decode
+const baseArgsOption3 = [
+  '--vo=direct3d',          // Windows software D3D renderer — very compatible
+  '--hwdec=no',             // Software decode only
+  `--wid=${hwnd}`,
+  '--idle=yes',
+  '--keep-open=yes',
+];
+
+// Test Option 4 — absolute nuclear option to confirm MPV is the issue:
+const baseArgsOption4 = [
+  '--vo=null',              // No video output — if audio plays, MPV is fine
+  `--wid=${hwnd}`,          // Still embed, just to test
+  '--idle=yes',
+];
+```
+
+**Diagnostic approach — add a runtime VO switcher:**
+
+```javascript
+// electron/mpvManager.cjs
+
+// Add this IPC handler to test different VOs without restarting:
+ipcMain.handle('mpv:set-vo', async (event, { vo }) => {
+  const allowedVOs = ['gpu-next', 'gpu', 'direct3d', 'null'];
+  if (!allowedVOs.includes(vo)) return { success: false };
+  
+  try {
+    await mpvInstance.setProperty('vo', vo);
+    console.log(`[MPVManager] VO switched to: ${vo}`);
+    return { success: true };
+  } catch (err) {
+    console.error(`[MPVManager] VO switch failed:`, err);
+    return { success: false, error: String(err) };
+  }
+});
+```
+
+---
+
+## Fix 3B — The HWND Conversion Is Critical
+
+**File: `electron/main.cjs`**
+
+The HWND you pass to MPV via `--wid` must be a specific format. Wrong format = MPV spawns but renders to nowhere:
+
+```javascript
+// electron/main.cjs
+
+// When getting HWND from the backing window:
+const rawHandle = mpvVideoWindow.getNativeWindowHandle();
+
+// rawHandle is a Buffer of the native HWND bytes
+
+// CORRECT conversion for Windows x64:
+// The HWND is stored as a 64-bit integer in the Buffer
+// MPV on Windows expects it as a decimal string
+let hwndDecimal;
+
+if (process.platform === 'win32') {
+  // Method 1 — Read as 32-bit LE (works for most Windows HWNDs which fit in 32 bits):
+  hwndDecimal = rawHandle.readUInt32LE(0).toString();
+  
+  // Method 2 — If Method 1 gives wrong result (large HWND on some systems):
+  // const low = rawHandle.readUInt32LE(0);
+  // const high = rawHandle.readUInt32LE(4);
+  // hwndDecimal = (BigInt(high) * BigInt(0x100000000) + BigInt(low)).toString();
+  
+  console.log(`[Main] Raw HWND buffer: ${rawHandle.toString('hex')}`);
+  console.log(`[Main] Decimal HWND for MPV: ${hwndDecimal}`);
+}
+
+// Pass to MPV manager:
+await mpvManager.initialize(mainWindow, settings, hwndDecimal);
+```
+
+**Add this verification log** — if the HWND decimal is `0` or very small, Method 2 is needed:
+
+```javascript
+console.log(`[Main] HWND decimal value: ${hwndDecimal}`);
+// Should be a large number like: 132456
+// If it's 0 or 1 or 2 — your HWND conversion is wrong
+// If it's something like 4294934528 — that might be a large HWND, use BigInt method
+```
+
+---
+
+## Fix 3C — node-mpv v1 WID Initialization Timing
+
+Since your manifest confirms you use `node-mpv` v1, which **spawns MPV immediately in the constructor**, there's a race condition where MPV gets `--wid` before the backing window's surface is fully mapped by Windows DWM:
+
+```javascript
+// electron/mpvManager.cjs
+
+async function initialize(mainWin, settings, hwnd) {
+  console.log(`[MPVManager] Initializing with HWND: ${hwnd}`);
+  
+  // Your manifest says you wait 800ms after construction for DWM mapping.
+  // This may not be enough. Try increasing to 1200ms:
+  
+  const NodeMPV = require('node-mpv');
+  
+  const mpvArgs = [
+    `--wid=${hwnd}`,
+    '--idle=yes',
+    '--keep-open=yes',
+    '--vo=gpu-next',
+    '--gpu-api=d3d11',
+    '--hwdec=auto-safe',
+    '--no-border',
+    '--no-osc',
+    '--no-osd-bar',
+    '--no-terminal',      // Reduce noise, node-mpv handles comms
+  ];
+  
+  // node-mpv v1 constructor options:
+  const mpvOptions = {
+    socket: '\\\\.\\pipe\\dylandos-mpv-ipc',
+    verbose: false,
+    debug: false,
+    binary: getMpvBinaryPath(),    // Your existing binary resolver
+    additionalArguments: mpvArgs,
+  };
+  
+  // Spawn node-mpv:
+  mpv = new NodeMPV(mpvOptions);
+  
+  // ─── CRITICAL: Wait for DWM surface ─────────────────────────────
+  // 800ms was your original wait. Test 1200ms if still black:
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  // ────────────────────────────────────────────────────────────────
+  
+  // Then verify the WID was accepted by getting video dimensions:
+  try {
+    const width = await mpv.getProperty('width');
+    console.log(`[MPVManager] MPV width property: ${width}`);
+    // If this returns 0 or null, WID wasn't properly registered
+  } catch (e) {
+    // Normal if no video loaded yet — that's OK
+  }
+  
+  // Wait for IPC:
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  
+  registerEventListeners();
+  mainWin.webContents.send('mpv:ready');
+}
+```
+
+---
+
+# SECTION 4: REACT STATE / COMPONENT FIXES
+
+---
+
+## Fix 4A — The Show/Hide MPV Window React Side
+
+**File: `src/components/MpvPlayer.tsx`**
+
+The most common cause of "worked, then black" is this: MPV show/hide IPC calls happening at wrong times or being called redundantly:
+
+```tsx
+// src/components/MpvPlayer.tsx
+
+export function MpvPlayer({ stream, streamType, onClose }: MpvPlayerProps) {
+  const mpv = useMpv();
+  
+  // ── SHOW/HIDE MPV WINDOW ────────────────────────────────────────────
+  // Show MPV backing window when component mounts:
+  useEffect(() => {
+    console.log('[MpvPlayer] Mounted — showing MPV video window');
+    window.electronAPI.invoke('mpv:show-video-window')
+      .catch(err => console.error('[MpvPlayer] Failed to show video window:', err));
+    
+    // Hide MPV backing window on unmount:
+    return () => {
+      console.log('[MpvPlayer] Unmounting — hiding MPV video window');
+      window.electronAPI.invoke('mpv:hide-video-window')
+        .catch(err => console.error('[MpvPlayer] Failed to hide video window:', err));
+      
+      // Also stop playback on unmount:
+      window.electronAPI.invoke('mpv:stop')
+        .catch(() => {});
+    };
+  }, []); // ← Empty dep array — only run once on mount/unmount
+  
+  // ── DO NOT call show-video-window inside the stream load effect ────
+  // ── Having it in TWO places causes a hide→show race condition ──────
+  
+  // Load the stream:
+  useEffect(() => {
+    if (!stream?.url) return;
+    
+    if (streamType === 'live') {
+      window.electronAPI.invoke('mpv:load-live', { 
+        url: stream.url, 
+        settings: getMpvSettings() 
+      });
+    } else {
+      window.electronAPI.invoke('mpv:load-vod', {
+        url: stream.url,
+        startPosition: stream.resumePosition ?? 0,
+        settings: getMpvSettings()
+      });
+    }
+  }, [stream?.url, streamType]);
+  
+  return (
+    <div
+      className="relative w-full h-full"
+      style={{ backgroundColor: 'transparent', background: 'transparent' }}
+    >
+      {/* Only render overlays — never the video itself */}
+      {/* The video is in the backing window behind this */}
+      
+      {mpv.state.status === 'loading' && <LoadingOverlay />}
+      {mpv.state.status === 'error' && <ErrorOverlay error={mpv.state.error} />}
+      
+      <PlayerControls mpv={mpv} streamType={streamType} onClose={onClose} />
+    </div>
+  );
+}
+```
+
+---
+
+## Fix 4B — Prevent Background Flash During State Transitions
+
+When `isPlayerOpen` toggles from `false` to `true`, there's a frame where the player container mounts but MPV's `show-video-window` IPC hasn't returned yet. During that frame, a black background appears:
+
+```tsx
+// src/components/VideoPlayerEngine.tsx
+
+export function VideoPlayerEngine({ stream, streamType, onClose }: Props) {
+  const [mpvWindowReady, setMpvWindowReady] = useState(false);
+  
+  useEffect(() => {
+    // Show MPV window and track when it's acknowledged:
+    window.electronAPI.invoke('mpv:show-video-window').then(() => {
+      setMpvWindowReady(true);
+    });
+    
+    return () => {
+      setMpvWindowReady(false);
+      window.electronAPI.invoke('mpv:hide-video-window');
+    };
+  }, []);
+  
+  return (
+    <div
+      className="fixed inset-0 z-50"
+      style={{ backgroundColor: 'transparent' }}
+    >
+      {/* 
+        Before MPV window is confirmed showing, render nothing — not even
+        a black placeholder. The desktop will show through, which looks
+        better than a black flash.
+      */}
+      {mpvWindowReady && (
+        <MpvPlayer
+          stream={stream}
+          streamType={streamType}
+          onClose={onClose}
+        />
+      )}
+      
+      {/* 
+        Optional: show a very brief loading pill while MPV confirms ready,
+        but do NOT use a full-screen black overlay here.
+      */}
+      {!mpvWindowReady && (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+          <div className="bg-black/60 backdrop-blur px-4 py-2 rounded-full text-white text-sm">
+            Starting player...
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## Fix 4C — Detect and Auto-Fix Black Screen at Runtime
+
+Add a runtime transparency checker that fires when the player opens:
+
+```tsx
+// src/hooks/useTransparencyCheck.ts
+
+export function useTransparencyCheck(isPlayerActive: boolean) {
+  useEffect(() => {
+    if (!isPlayerActive) return;
+    
+    // Small delay to let React render:
+    const timer = setTimeout(() => {
+      checkAndFixTransparency();
+    }, 500);
+    
+    return () => clearTimeout(timer);
+  }, [isPlayerActive]);
+}
+
+function checkAndFixTransparency() {
+  // Check if html/body have been given a background:
+  const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
+  const bodyBg = getComputedStyle(document.body).backgroundColor;
+  
+  const isOpaque = (color: string) => 
+    color !== 'transparent' && 
+    color !== 'rgba(0, 0, 0, 0)' &&
+    !color.startsWith('rgba(0, 0, 0, 0');
+  
+  if (isOpaque(htmlBg)) {
+    console.warn('[TransparencyCheck] html has opaque background:', htmlBg, '— fixing');
+    document.documentElement.style.backgroundColor = 'transparent';
+  }
+  
+  if (isOpaque(bodyBg)) {
+    console.warn('[TransparencyCheck] body has opaque background:', bodyBg, '— fixing');
+    document.body.style.backgroundColor = 'transparent';
+  }
+  
+  // Force Electron to repaint the window with correct transparency:
+  // This sends a signal to the main process to re-assert transparency:
+  if (window.electronAPI) {
+    window.electronAPI.invoke('window:force-repaint').catch(() => {});
+  }
+}
+```
+
+```javascript
+// electron/main.cjs — add the handler:
+
+ipcMain.handle('window:force-repaint', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  
+  // Force a transparent repaint:
+  const currentBounds = mainWindow.getBounds();
+  
+  // Method: briefly resize by 1px and back — forces compositor repaint:
+  mainWindow.setBounds({ 
+    ...currentBounds, 
+    width: currentBounds.width + 1 
+  });
+  
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setBounds(currentBounds);
+    }
+  }, 16); // One frame at 60fps
+  
+  // Re-assert background color:
+  mainWindow.setBackgroundColor('#00000000');
+});
+```
+
+---
+
+# SECTION 5: THE COMPLETE DIAGNOSTIC + FIX SEQUENCE
+
+---
+
+## Step-By-Step — Do These In Order
+
+```
+STEP 1 — RUN THE CONSOLE DIAGNOSTIC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Open DevTools while black screen is showing.
+Paste the diagnostic script from the top of this document.
+Read which layer has the problem.
+
+STEP 2 — CHECK electron/main.cjs backgroundColor
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Search for 'backgroundColor' in main.cjs.
+Must be '#00000000' (8 chars).
+If it's '#000000' — THAT IS YOUR BUG. Change it and restart.
+
+STEP 3 — CHECK global CSS
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+Search project for any of these strings:
+  'bg-black' on player container divs
+  'background: #000' or 'background: black'  
+  'backgroundColor: "#000"' in inline styles
+  'background-color: rgb(0,0,0)' in computed styles
+Change all instances on the player wrapper to 'transparent'.
+
+STEP 4 — CHECK MpvPlayer.tsx outermost div
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+className must NOT contain: bg-black, bg-gray-*, bg-neutral-*
+style must NOT contain: backgroundColor: '#000000' or similar
+
+STEP 5 — CHECK HWND value
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+Add console.log for the decimal HWND value.
+Should be a large number (100,000+).
+If 0 or very small — HWND conversion is wrong, use Fix 3B.
+
+STEP 6 — TRY --vo=direct3d
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+In mpvManager.cjs, change --vo to direct3d temporarily.
+If video appears — your gpu-next/d3d11 config is the issue.
+Then try vo=gpu-next with different gpu-api values.
+
+STEP 7 — TRY disable-gpu-compositing
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Add app.commandLine.appendSwitch('disable-gpu-compositing')
+before app.whenReady() in main.cjs.
+Restart app. Test transparency.
+
+STEP 8 — TRY the resize-trick force repaint
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Add the window:force-repaint IPC handler from Fix 4C.
+Call it from renderer after player opens.
+If this fixes it — you have a compositor timing issue 
+and need the DWM wait increase from Fix 3C.
+```
+
+---
+
+## Quick Reference — Symptom to Fix Map
+
+| Symptom | Most Likely Fix |
+|---|---|
+| Always black from the start | Fix 2A — `backgroundColor: '#00000000'` |
+| Black on first open, works after Alt-Tab | Fix 2D — focus handler Z-order |
+| Works for VOD, black for live (or vice versa) | Fix 4A — show/hide race condition |
+| Black appears after navigating away and back | Fix 4B — mount/unmount show-video-window timing |
+| Black only on some machines | Fix 2B — Chromium flags |
+| Audio plays, black, details panel shows video | Fix 1C — player container `bg-black` CSS class |
+| HWND logs as 0 | Fix 3B — 64-bit HWND BigInt conversion |
+| Random black flashes during playback | Fix 2E — MPV backing window `parent` not set |
+| Black after minimize/restore | Fix 2D — restore handler |
+
+---
+
+## The Single Most Likely Root Cause
+
+Based on your description — **"was working, then after a few instances the black screen appeared"** — the #1 most likely culprit is:
+
+```javascript
+// electron/main.cjs
+
+// ❌ YOUR CURRENT CODE IS PROBABLY:
+backgroundColor: '#000000',   // 6 chars = opaque black
+
+// ✅ NEEDS TO BE:
+backgroundColor: '#00000000', // 8 chars = transparent
+```
+
+**Or in `MpvPlayer.tsx`:**
+
+```tsx
+// ❌ YOUR CURRENT CODE IS PROBABLY:
+<div className="relative w-full h-full bg-black">
+
+// ✅ NEEDS TO BE:
+<div className="relative w-full h-full">
+```
+
+Check those two things first. One of them is almost certainly it.

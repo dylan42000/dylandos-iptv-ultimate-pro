@@ -1,0 +1,43 @@
+{
+  "version": "4.4.1",
+  "versionCode": 55,
+  "releaseDate": "2026-05-16",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "FIX: Firestick D-pad confirm now reliably bridges from Movies and Series category rail into the content grid instead of bouncing focus away.",
+    "FIX: Movies and Series loading now uses strict timeouts and off-main-thread filtering to prevent long hangs and random exits to home.",
+    "FIX: Guide loading and EPG fallback processing are bounded and moved off the UI thread to improve stability on large playlists.",
+    "FIX: OTA updater now validates both expected file size and SHA256 before install, with explicit on-screen error messaging.",
+    "FIX: OTA completion handling now has receiver plus polling fail-safe so updates do not get stuck at 100% after download.",
+    "FIX: Settings account editor now dismisses the keyboard on password done/save for smoother remote-only flow."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_4_4_1_LINK/app-firestick-release.apk?dl=1",
+      "apkSize": 59200456,
+      "sha256": "31087b3479cadceea0d91e89465729a7939a05f478d27f3ad332ab455fcde1e9",
+      "minSdk": 21,
+      "targetSdk": 35,
+      "abi": [
+        "armeabi-v7a"
+      ]
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_PREMIUM_4_4_1_LINK/app-premium-release.apk?dl=1",
+      "apkSize": 60458827,
+      "sha256": "456aaa49a2b7c6c176e7b0e43cc1585ebab4bb5895375842e8bcad0ffa929b2a",
+      "minSdk": 21,
+      "targetSdk": 35,
+      "abi": [
+        "arm64-v8a"
+      ]
+    }
+  },
+  "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_4_4_1_LINK/app-firestick-release.apk?dl=1",
+  "apkSize": 59200456,
+  "sha256": "31087b3479cadceea0d91e89465729a7939a05f478d27f3ad332ab455fcde1e9",
+  "notes": "STEPS TO PUBLISH:\n1. Upload both 4.4.1 APKs to Dropbox and copy direct links (dl=1).\n2. Replace REPLACE_WITH_FIRESTICK_4_4_1_LINK and REPLACE_WITH_PREMIUM_4_4_1_LINK with real Dropbox IDs.\n3. Save this file as update.json in gist 6056e65b41641393abf585cecbd92d07."
+}

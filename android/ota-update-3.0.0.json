@@ -1,0 +1,39 @@
+{
+  "version": "3.0.0",
+  "versionCode": 37,
+  "releaseDate": "2026-05-07",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "FIX: Movies and TV series now display the correct show/episode name during playback instead of a raw stream number.",
+    "FEATURE: FireStick remote Rewind, Fast Forward, and Play/Pause hardware keys now fully control the player.",
+    "FEATURE: Expanded CC and subtitle options in the player — includes Disable CC toggle, per-track naming improvements, and a Subtitle Delay control (±100ms / ±500ms nudge) accessible from the subtitle picker.",
+    "FEATURE: New 'LibVLC' tab in Settings with full engine tuning options — Audio Output module (AudioTrack / OpenSL ES), Audio Resampler, Display Chroma format, Subtitle encoding, Drop Late Frames, Skip Frames, Clock Jitter, Network MTU, and Verbose Logging.",
+    "IMPROVEMENT: Subtitle text encoding selector (Auto / UTF-8 / Latin-1 / Win-1252 / KOI8-R) to fix garbled subtitle text for international content.",
+    "Under the hood: LibVLC initialization now reads all engine settings from the new LibVLC settings tab."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "PLACEHOLDER_FIRESTICK_URL",
+      "apkSize": 59044399,
+      "sha256": "3385de61919f8dba725aaeaa3c096eade8b8d90994bb3809dd7ec7573bcc9666",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["armeabi-v7a"]
+    },
+    "premium": {
+      "apkUrl": "PLACEHOLDER_PREMIUM_URL",
+      "apkSize": 60302756,
+      "sha256": "8aa66cc4d8d2168c14f8b18f053b76a6274b83c0cdabd5bb1499ccf86c927c78",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["arm64-v8a"]
+    }
+  },
+  "apkUrl": "PLACEHOLDER_FIRESTICK_URL",
+  "apkSize": 59044399,
+  "sha256": "3385de61919f8dba725aaeaa3c096eade8b8d90994bb3809dd7ec7573bcc9666",
+  "notes": "STEPS TO PUBLISH:\n1. Upload app-firestick-release.apk to Dropbox → copy direct link (dl=1)\n2. Upload app-premium-release.apk to Dropbox → copy direct link (dl=1)\n3. Replace PLACEHOLDER_FIRESTICK_URL with the Firestick APK Dropbox link\n4. Replace PLACEHOLDER_PREMIUM_URL with the Premium APK Dropbox link\n5. Run scripts/compute-sha256.ps1 against each APK and fill in sha256 fields\n6. Update apkSize fields with actual file sizes in bytes\n7. Update the top-level apkUrl to the Firestick APK link\n8. Save this file as update.json (filename on gist side) in gist 6056e65b41641393abf585cecbd92d07"
+}

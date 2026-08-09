@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Generic roots so Package Installer can read APKs from any app-managed path. -->
+    <files-path name="files_root" path="." />
+    <cache-path name="cache_root" path="." />
+    <external-files-path name="external_files_root" path="." />
+
+    <!-- OTA update APK download location -->
+    <external-files-path name="apk_downloads" path="Downloads/" />
+    <cache-path name="apk_cache" path="apk/" />
+
+    <!-- DVR recordings — internal app storage (last resort, limited Firestick space) -->
+    <files-path name="internal_dvr" path="DVR/" />
+
+    <!-- DVR recordings — external app-specific path (primary external / OTG) -->
+    <external-files-path name="external_dvr" path="DVR/" />
+
+    <!-- DVR temp files -->
+    <external-cache-path name="external_dvr_cache" path="." />
+</paths>

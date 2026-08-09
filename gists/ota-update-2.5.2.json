@@ -1,0 +1,38 @@
+{
+  "version": "2.5.2",
+  "versionCode": 29,
+  "releaseDate": "2026-04-23",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "TV Series: detail uses system Dialog so D-pad focus stays in seasons/episodes; close (X) in header for Fire TV",
+    "DVR: USB/SAF paths no longer cleared when persisted URI string differs slightly (DocumentFile canWrite + relaxed match); Snackbar on pick/cancel; tips for “Choose folder” + USB sidebar",
+    "Live TV: centered zapping / channel card with EPG “now” title and time window (short EPG)",
+    "Player: debounced Back navigation; slightly longer zap debounce; Home: Quick Access grid height + faster home list processing on large libraries",
+    "ApkUrl: paste your direct download links; run Get-FileHash on built APKs and update sha256 + apkSize"
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/scl/fi/qyie1q1th25a5hsz6t05p/app-firestick-release.apk?rlkey=jrn9cex4m05haczfq7pqrurfr&st=o886yzwq&dl=1",
+      "apkSize": 59013821,
+      "sha256": "7F356085317C7F666BDD03A5EC87BE6D8D4D32629A1B82B1B9FF6A40BF2119C0",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["armeabi-v7a"]
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/scl/fi/rwdr62dl25u6910oicljd/app-premium-release.apk?rlkey=pnka11ijryzoc4a94bv0jl2mx&st=1ul1882n&dl=1",
+      "apkSize": 60272319,
+      "sha256": "A76B353342F2AC0E8C87B3437F0678424FEECD2DBEC3675DC4BF91EFABA4D775",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["arm64-v8a"]
+    }
+  },
+  "apkUrl": "https://www.dropbox.com/scl/fi/qyie1q1th25a5hsz6t05p/app-firestick-release.apk?rlkey=jrn9cex4m05haczfq7pqrurfr&st=o886yzwq&dl=1",
+  "apkSize": 59013821,
+  "sha256": "7F356085317C7F666BDD03A5EC87BE6D8D4D32629A1B82B1B9FF6A40BF2119C0",
+  "notes": "Upload app-firestick-release.apk and app-premium-release.apk, then update urls and hashes; save as update.json in gist 6056e65b41641393abf585cecbd92d07"
+}

@@ -1,0 +1,45 @@
+{
+  "version": "2.2.0",
+  "versionCode": 23,
+  "releaseDate": "2026-04-20",
+  "mandatory": false,
+  "minRequiredVersionCode": 18,
+  "changelog": [
+    "Full Firestick D-pad remapping across all screens — every button navigates correctly",
+    "Guide: ENTER now correctly opens program details instead of accidentally going Home",
+    "Guide: Channel cells are now individually D-pad focusable and selectable",
+    "Guide: UP/DOWN on programs directly zaps to adjacent channels (200+ channel support)",
+    "Player: Subtitle and audio track pickers use correct LibVLC track IDs",
+    "Player: Control bar navigation is now circular — wraps around from last button to first",
+    "Settings: New DVR Storage Location section with USB/OTG drive picker",
+    "Settings: 'Choose Drive' button lists Internal Storage and all connected USB OTG drives",
+    "Settings: 'Choose Folder' button opens full SAF folder browser for any drive",
+    "Settings: DVR storage path persisted across app restarts via ContentResolver permissions",
+    "Accounts: Added account type tagging — mark accounts as Live TV, DVR Only, or All Features",
+    "Accounts: Account type badge shown on every account card in the account switcher",
+    "Intro video now plays on first launch only — no more video on every cold start",
+    "Fixed: AccountEditorDialog now saves accountType correctly when creating/editing accounts"
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://gist.githubusercontent.com/DylandosIPTV/ota/raw/v2.2.0/app-firestick-release.apk",
+      "apkSize": 64371446,
+      "sha256": "9ec111951845fd946089dd0dbd82122d969402e73f87ebdb56559713b4a01261",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["armeabi-v7a"]
+    },
+    "premium": {
+      "apkUrl": "https://gist.githubusercontent.com/DylandosIPTV/ota/raw/v2.2.0/app-premium-release.apk",
+      "apkSize": 65629802,
+      "sha256": "9b25b7a1062ee57ce530069abba88b7b64f2a04c04891b67fb3c2809b416b9cf",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": ["arm64-v8a"]
+    }
+  },
+  "apkUrl": "https://gist.githubusercontent.com/DylandosIPTV/ota/raw/v2.2.0/app-firestick-release.apk",
+  "apkSize": 64371446,
+  "sha256": "9ec111951845fd946089dd0dbd82122d969402e73f87ebdb56559713b4a01261",
+  "notes": "Update apkUrl to your actual hosting URL and replace sha256 values after uploading APKs."
+}

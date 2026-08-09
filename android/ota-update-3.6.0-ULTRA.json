@@ -1,0 +1,15 @@
+{
+  "versionCode": 43,
+  "versionName": "3.6.0-ULTRA",
+  "releaseNotes": "v3.6.0-ULTRA: Canvas EPG overhaul eliminates LazyColumn/LazyRow jank — only visible cells drawn (O(visible)). Smooth fling-physics X/Y scroll. Cinematic player overlay with Netflix-style controls, auto-hide, Stats-for-Nerds debug panel. Category-coded programme blocks with cyan focus outline and now-playing progress strips.",
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/scl/fi/dtdwsma7t91ke87787ncv/app-firestick-release.apk?rlkey=g966zniw47isvkpios01josvs&st=cads6gvj&dl=1",
+      "apkSha256": "a78c9e55fc06ae9e47b80fc8626df98d3c751078b592bb1608d3758c6b52ab73"
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/scl/fi/ywtxbtffat2kuiry74wdp/app-premium-release.apk?rlkey=1rruu4div4wasa6s5ejvst87z&st=j4ht875n&dl=1",
+      "apkSha256": "60f000d0e1fa2d4f10915d5c7aba8eb6c438fc7661a2e951ade0e93cf763e645"
+    }
+  }
+}

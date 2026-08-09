@@ -1,0 +1,17 @@
+{
+  "versionCode": 50,
+  "versionName": "4.1.0",
+  "releaseNotes": "v4.1.0: Ultra performance + UX upgrade pass.\n\n🎬 PLAYER ENHANCEMENTS:\n• MENU key cycles aspect ratio (Auto → 16:9 → 4:3 → 1:1 → Fill) with OSD indicator\n• MENU key (2nd press) shows stream info overlay: codec, resolution, audio channels, bitrate\n• UP/DOWN keys now control volume in VOD/DVR mode (10% steps, 0–200% range)\n• Auto-deinterlace enabled for all live streams (yadif2x — best quality for sports/broadcast)\n• Live streams no longer drop frames to catch up — prevents audio desync on busy channels\n\n📺 LIVE TV GUIDE IMPROVEMENTS:\n• Channel rows now show EPG progress bar (how far through the current program)\n• 'Up Next' label shows the next program title when a channel row is focused\n• Channel logos smoothly scale up when focused (44→48dp animated)\n\n🎥 MOVIES & SERIES:\n• Movie and Series poster cards show a heart icon when focused (add-to-favorites affordance)\n• Movie detail screen: similar titles rail uses fast tween animation (no more spring jank on Firestick)\n• Action button animations converted to smooth tween(120ms) for consistent 60fps on Fire TV\n\n🏠 HOME SCREEN:\n• Hero banner auto-scroll pauses when the Play button is focused (no more rotation mid-action)\n\n🔍 SEARCH:\n• Recent searches displayed when search bar is blank — tap to instantly re-run any previous search\n\n⭐ FAVORITES:\n• Empty state now has a 'Browse Content' button so first-time users don't get stuck\n\n⚡ PERFORMANCE:\n• Series info responses now cached (50-entry FIFO, same TTL as VOD) — faster re-visits\n• Series info cache cleared on logout to prevent stale data between profiles\n\n🔧 BUILD:\n• targetSdk bumped to 35 (Android 15) — full compliance for Play Store submission",
+  "flavors": {
+    "firestick": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_FIRESTICK_LINK/app-firestick-release.apk?dl=1",
+      "apkSha256": "459ba45f50f1ff1a246687a9debacdbc71dcdda71deb2b88efed3bacfe4d9941",
+      "apkSizeBytes": 59177665
+    },
+    "premium": {
+      "apkUrl": "https://www.dropbox.com/REPLACE_WITH_PREMIUM_LINK/app-premium-release.apk?dl=1",
+      "apkSha256": "789254ea845374e0a6202b635ea509f98eefb1f06253ad807fb11515afcf87b2",
+      "apkSizeBytes": 60436202
+    }
+  }
+}

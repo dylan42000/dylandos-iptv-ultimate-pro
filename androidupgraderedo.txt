@@ -1,0 +1,630 @@
+# DYLANDOS IPTV ULTIMATE — v4.7.0 FINAL WORLD-CLASS UPGRADE SPECIFICATION
+
+Status: reviewed and build-ready  
+Target: Android TV / Fire TV, with Fire TV Stick 4K-class hardware as the performance floor  
+Baseline verified against the repository: app `4.6.8` (`versionCode 67`), Room schema `10`  
+Planned release: app `4.7.0` (`versionCode 68`), Room schema `11` only if Custom Lists ships
+
+---
+
+## 0. Purpose and engineering rules
+
+This document is the source of truth for the v4.7.0 implementation pass. It replaces the earlier illustrative code snippets. The implementation must integrate with the current repository rather than replace whole files blindly.
+
+The release has three goals:
+
+1. Fix DVR storage/recording and Search favorites with production diagnostics.
+2. Deliver a cohesive, premium TV interface that remains fast and predictable with a D-pad.
+3. Add EPG, sorting, preview, and Custom Lists features without destabilizing playback, migrations, or low-memory devices.
+
+Non-negotiable rules:
+
+- Preserve working behavior and existing user data.
+- No destructive Room migration and no `fallbackToDestructiveMigration()` in release builds.
+- No direct writing to `/proc/mounts`, `/mnt/media_rw`, or arbitrary USB roots.
+- No second decoder/player for decorative previews on Firestick builds.
+- No raw database injection into UI ViewModels when a repository already owns the domain.
+- No hardcoded signing passwords or private release credentials in tracked Gradle files.
+- No feature is complete without empty, loading, success, error, and retry states.
+- Every interactive control must work with D-pad, Back, Select/Enter, and the Fire TV Menu key where applicable.
+- Keep user-facing strings in resources. Do not use emoji as the only label or meaning.
+- Respect safe areas/overscan, font scaling, reduced-motion preference, and minimum contrast.
+- Avoid broad whole-file replacements. Make focused changes and compile after each workstream.
+
+---
+
+## 1. Release scope and priority
+
+### P0 — release blockers
+
+1. DVR storage selection, recording progress, and failure diagnostics.
+2. Favorites from Search, including collision-safe identity across Live/Movie/Series.
+3. Database migration correctness and upgrade test.
+4. Release signing secrets removed from source control and supplied securely.
+5. Firestick and Premium release variants compile, install, launch, and play media.
+
+### P1 — required product upgrades
+
+6. Unified visual system and TV focus behavior.
+7. Home hero and content rows.
+8. Live TV Now + Next 3 EPG.
+9. Region/language category ordering.
+10. Unified Settings controls.
+11. Navigation transitions and top navigation refinement.
+12. Performance, memory, accessibility, and stability pass.
+
+### P2 — ship only after P0/P1 gates pass
+
+13. Custom Lists.
+14. Lightweight artwork previews.
+15. Animated splash polish.
+
+If schedule or stability forces a cut, defer P2 behind a disabled-by-default feature flag. Do not compromise P0/P1.
+
+---
+
+## 2. P0 — DVR storage and recording reliability
+
+### 2.1 Correct storage model
+
+The current `StorageDetector` already uses the correct primary mechanism: `ContextCompat.getExternalFilesDirs()` and `StorageManager` metadata. Continue from that design.
+
+Supported storage targets, in priority order:
+
+1. A user-selected persisted SAF tree URI when the device picker works and the grant is valid.
+2. A writable app-specific directory on removable storage returned by Android APIs.
+3. A previously selected writable absolute app-owned path.
+4. A writable primary app-specific external directory.
+5. Internal app storage only after warning the user about available space.
+
+Do not assume filesystem type from a path. Do not promise exFAT support on every Fire OS model. The only authoritative test is a real create/write/flush/read/delete probe in the exact target directory.
+
+The selected target must use a stable persisted identity: SAF URI when applicable, otherwise the canonical app-owned directory plus available `StorageVolume.uuid`. A mount path alone is not stable across reboots or remounts.
+
+### 2.2 Storage inventory UI
+
+Use the existing DVR storage picker/ViewModel components. Show one card per writable app-visible volume with:
+
+- Friendly volume label.
+- Removable/Internal badge.
+- Free and total capacity.
+- Estimated recording time at a conservative configurable bitrate.
+- Selected state.
+- Last write-test result.
+- Clear fallback reason when the preferred volume is missing or unwritable.
+
+Never label an unknown filesystem as NTFS/exFAT. Avoid exposing raw paths in the primary UI; include them only in an expandable diagnostics panel.
+
+Required actions:
+
+- Rescan.
+- Select and validate.
+- Open system folder picker when available.
+- Copy diagnostics.
+- Safely fall back without silently changing the persisted user preference.
+
+### 2.3 Recording pipeline and progress
+
+The 0% symptom must be diagnosed at the writer/service layer, not inferred from storage discovery alone.
+
+Recording state must be an explicit state machine:
+
+`Preparing -> Connecting -> Recording -> Finalizing -> Completed`
+
+Terminal failure states must include a stable error code and a user-safe message:
+
+- `STORAGE_MISSING`
+- `STORAGE_NOT_WRITABLE`
+- `INSUFFICIENT_SPACE`
+- `SOURCE_CONNECT_FAILED`
+- `SOURCE_READ_FAILED`
+- `OUTPUT_OPEN_FAILED`
+- `WRITE_FAILED`
+- `FINALIZE_FAILED`
+- `CANCELLED`
+
+Progress rules:
+
+- For a scheduled recording, progress is elapsed scheduled duration / planned duration.
+- For an open-ended manual recording, show elapsed time and bytes written, not a fake percentage.
+- Update progress only from actual service/writer telemetry.
+- Track bytes written, elapsed time, last successful write time, output target, and reconnect count.
+- Detect a stalled writer when input is active but bytes have not advanced within a defined timeout.
+- Flush/finalize on stop and surface finalization failure.
+- Preserve partial files after recoverable failures and label them as incomplete.
+- Check free space before starting and periodically while recording.
+- Use a reserved-space floor so the device is never filled completely.
+
+### 2.4 DVR diagnostics
+
+Add structured Timber events with a single recording correlation ID. Never log playlist credentials, tokens, full authenticated URLs, or personally identifying data.
+
+Diagnostics must include:
+
+- App/version/flavor and Android/Fire OS version.
+- Storage target type, sanitized identity, writable probe, and capacity.
+- State transitions and timestamps.
+- HTTP status/error class without secrets.
+- Bytes received/written and final file size.
+- Reconnect/fallback decisions.
+
+The UI must offer a redacted copy-to-clipboard report.
+
+### 2.5 DVR acceptance tests
+
+- With two partitions present, the app lists only Android-visible writable targets and selects the valid removable target.
+- Removing and reinserting USB does not crash; the UI marks it unavailable and can rebind it.
+- A failed write probe blocks recording to that target and shows a useful reason.
+- A 10-minute recording shows advancing time/bytes and produces a playable non-zero file.
+- Manual recordings never remain at a misleading 0%.
+- Scheduled recording survives screen navigation and continues in the foreground service.
+- Low-space handling stops cleanly and does not fill storage to zero.
+- Credentials are absent from Logcat and copied diagnostics.
+
+---
+
+## 3. P0 — Favorites from Search
+
+### 3.1 Identity and architecture
+
+Do not use `streamId` alone as the favorite identity. Providers may reuse numeric IDs across Live, Movie, and Series. Use the existing favorite schema/repository contract and treat `(contentType, streamId)` as the logical key. Include provider/profile identity if the current database permits multiple providers in the same installation.
+
+Search must reuse the same favorite repository and content-type values as Live TV, Movies, Series, Guide, and Favorites. Do not introduce a second incompatible `ContentType` enum.
+
+Expose favorite state as a Flow keyed by the composite favorite key. Use an atomic DAO/repository toggle transaction or conflict-safe insert/delete so rapid repeated key presses cannot create duplicates.
+
+### 3.2 Search interaction
+
+For every Search result:
+
+- Select/Enter opens or plays using the existing navigation contract.
+- Long Select and the Fire TV Menu key open the same context menu.
+- The context menu contains Add/Remove Favorite and Add to Custom List when that feature is enabled.
+- The card updates immediately after a successful toggle.
+- On failure, restore the prior UI state and show a concise message.
+- A visible favorite icon must have a text/content description; color alone is insufficient.
+
+Do not stack `.clickable` and `pointerInput(detectTapGestures)` on the same card in a way that double-fires Select. Use one input owner or the shared TV-focus component.
+
+### 3.3 Favorites acceptance tests
+
+- Favorite a Live result, Movie result, and Series result from Search.
+- The correct three items appear on Favorites and persist after process restart.
+- Identical numeric IDs with different content types do not collide.
+- Menu/long-press toggling fires once per action.
+- Removing a favorite updates Search and Favorites without requiring a refresh.
+- A failed database operation does not leave a false heart indicator.
+
+---
+
+## 4. P1 — Unified visual system
+
+### 4.1 Design direction
+
+Use a restrained neon-noir system, not continuous glow everywhere.
+
+- Background: near-black navy with subtle tonal layers.
+- Primary focus/accent: cyan.
+- Secondary accent: violet.
+- Success: accessible green.
+- Warning: amber.
+- Error: red with sufficient text contrast.
+- Body copy: high-contrast off-white; muted text must remain readable from TV distance.
+
+Create semantic color tokens rather than scattering literal colors. Include focused, pressed, selected, disabled, error, and scrim states.
+
+Typography:
+
+- Bundle fonts locally only if licensing and APK cost are acceptable.
+- Provide a system sans-serif fallback.
+- Reserve display type for short headings; do not use Orbitron-style text for dense body copy.
+- Validate truncation and line height at Android font scales 1.0 and 1.3.
+
+### 4.2 Shared components
+
+Extend existing shared components instead of creating screen-specific copies:
+
+- TV focus surface/card.
+- Primary, secondary, and destructive buttons.
+- Poster and landscape cards.
+- Status badge/chip.
+- Loading skeleton.
+- Empty state.
+- Error/retry state.
+- Dialog/context menu.
+- Section header.
+
+All components must expose semantic labels and consistent focus treatment.
+
+### 4.3 Focus behavior
+
+Focus is functional navigation first and animation second.
+
+- One obvious focus indicator: 2–3 dp high-contrast border plus modest elevation/glow.
+- Default focused scale should remain approximately 1.03–1.06 to avoid clipping neighboring content.
+- Keep animation around 120–180 ms; avoid infinite shimmer on every focused item.
+- Focused cards must render above siblings and stay within container padding.
+- Restore focus when returning from detail/player screens.
+- Initial focus must be deterministic.
+- Back returns to the prior focus anchor where possible.
+- Honor reduced motion by disabling parallax, pulsing, scanlines, and large movement.
+
+### 4.4 Visual acceptance tests
+
+- Every screen is fully navigable without touch or mouse.
+- Focus never becomes invisible, trapped, or lost after a list refresh.
+- Text and controls remain readable at 720p, 1080p, and 4K output.
+- No card clipping at row edges during focus scale.
+- UI remains usable with animations disabled.
+
+---
+
+## 5. P1 — Home screen
+
+The Home screen should improve discovery without launching additional media decoders.
+
+### Hero behavior
+
+- Source hero items from actual playable recent/recommended content.
+- Use poster/backdrop artwork, title, type, metadata, and a short context line.
+- Actions: Play/Watch, Details, Favorite; Continue Watching also shows progress.
+- Rotate only while Home is active and no child control is focused.
+- Pause rotation after any user interaction.
+- Preserve focus and avoid changing the focused content beneath the user.
+- Use crossfade/tonal motion only; no expensive realtime blur on low-memory devices.
+
+### Content rows
+
+- Continue Watching.
+- Favorites.
+- Recently Watched.
+- Live Now.
+- Movies.
+- Series.
+
+Hide empty rows or show a useful onboarding action. Use stable keys and repository-backed pagination. Never materialize an entire large provider catalog into Compose state.
+
+Home acceptance:
+
+- First useful content renders promptly from cached data.
+- Hero never points to unavailable content.
+- Returning from Details restores row and item focus.
+- Empty/new accounts have a coherent onboarding state.
+- No player instance is created simply by focusing Home artwork.
+
+---
+
+## 6. P1 — Live TV Now + Next 3
+
+Use the existing EPG matching/parsing pipeline and DAO schema. Query by the channel's established EPG identity and current wall-clock time, returning the current program plus the next three ordered by start time.
+
+Requirements:
+
+- Correct timezone conversion and DST handling.
+- Clamp progress to 0–100% and handle invalid/overlapping program data.
+- Display Now title, time range, and progress.
+- Display the next three titles and time ranges when space permits.
+- Use `No guide information` rather than fabricated schedule data.
+- Refresh at program boundaries and when the selected channel changes, not every frame.
+- Cancel prior channel queries on rapid navigation (`flatMapLatest`/equivalent).
+- Do not auto-hide essential information while the user is reading/interacting with it.
+
+EPG acceptance:
+
+- Channel changes never briefly show the previous channel's schedule as current.
+- Midnight, DST transition, missing EPG, and overlapping entries are handled.
+- Rapid D-pad scrolling does not create a query backlog.
+- The strip fits at 720p without obscuring playback controls.
+
+---
+
+## 7. P1 — Region/language category ordering
+
+This is ranking, not destructive filtering by default. Users must not lose access to categories because a prefix was not recognized.
+
+Model:
+
+- Store stable region/language IDs, not display strings.
+- Normalize category names using case-folding, punctuation removal, whitespace compaction, and diacritic-safe comparison.
+- Use an ordered alias dictionary (for example `US`, `USA`, `United States`) with token boundaries to prevent false matches.
+- Rank selected regions first, then unmatched categories in original provider order.
+- Keep Adults/blocked categories subject to existing parental/content filters.
+- Offer presets plus manual ordering.
+- Include `Provider order`, `A–Z`, and `Priority regions` modes.
+- Persist per profile/provider if settings are scoped that way elsewhere.
+
+Do not hardcode 60 duplicate prefix branches in UI code. Put metadata in one data-driven catalog and test the matcher.
+
+Acceptance:
+
+- Selecting US then UK ranks matching categories in that order.
+- Unmatched categories remain visible.
+- `US` does not match arbitrary words containing those letters.
+- Reset restores provider order.
+- Settings persist after restart and do not bypass parental filtering.
+
+---
+
+## 8. P1 — Settings and navigation
+
+### Settings
+
+Group settings into clear sections:
+
+- Playback.
+- DVR & Timeshift.
+- Guide/EPG.
+- Categories & Region Priority.
+- Appearance & Motion.
+- Storage Diagnostics.
+- Updates.
+- About & Diagnostics.
+
+Every setting needs a concise description and current value. Destructive reset actions require confirmation. Settings changes must use the existing DataStore/ViewModel path and should not block the main thread.
+
+### Navigation
+
+- Keep route contracts type-safe where practical.
+- Use subtle fade/slide transitions around 150–220 ms.
+- Do not attempt shared-element transitions unless the current Navigation/Compose versions support a stable integrated path and it passes Firestick tests.
+- Avoid serializing large objects into routes; pass IDs and load from repositories.
+- Deep links/back-stack restoration must not create duplicate player destinations.
+- Top navigation labels should be text-first; icons supplement labels rather than emoji-only navigation.
+- The selected destination and focused destination must be visually distinct.
+
+Acceptance:
+
+- Back behavior is predictable from every top-level and detail screen.
+- Repeatedly selecting the current top-level destination does not duplicate it.
+- Process recreation restores a safe destination.
+- Transitions do not delay input or produce black frames.
+
+---
+
+## 9. P1 — Performance, memory, and stability
+
+Do not add annotations mechanically. `@Immutable` is valid only for objects whose public fields are deeply immutable; `@Stable` must satisfy Compose's stability contract.
+
+Required work:
+
+- Measure startup, Home render, Live channel change, Search latency, and memory before/after.
+- Use Paging for large Movies/Series collections already supported by the project.
+- Use stable item keys and content types in lazy containers.
+- Collect flows with lifecycle awareness.
+- Use `derivedStateOf` only where it reduces actual recomposition work.
+- Cancel superseded search, artwork, EPG, and preview work.
+- Bound image sizes to rendered dimensions and configure memory/disk caching deliberately.
+- Avoid per-frame object allocation in gradients, formatters, and drawing code.
+- Avoid realtime blur and multiple infinite animations on low-memory devices.
+- Ensure player/service resources close on lifecycle and terminal states.
+- Run a release/minified build to catch R8-only failures.
+
+Performance budgets on Firestick-class hardware (measure, do not guess):
+
+- No sustained UI thread stalls during D-pad scrolling.
+- No OutOfMemoryError during 30 minutes of browse/play/back repetition.
+- No monotonic player/bitmap memory growth across 20 playback cycles.
+- Search query cancellation keeps results aligned with the current text.
+- App launch and first-content timing must not regress more than 10% from the measured 4.6.8 baseline unless explicitly approved.
+
+Strong skipping is already part of modern Compose compiler behavior; do not add obsolete `enableStrongSkippingMode` configuration without verifying the active Kotlin/Compose plugin supports and needs it.
+
+---
+
+## 10. P2 — Custom Lists
+
+Custom Lists ships only after the core release gates pass.
+
+### Data model
+
+Because the current Room database is version 10, this feature requires schema version 11 and `MIGRATION_10_11`.
+
+Recommended logical tables:
+
+`custom_lists`
+
+- Stable generated list ID.
+- Profile/provider scope where applicable.
+- Name with normalized uniqueness policy.
+- Optional icon token and semantic color token.
+- Created/updated timestamps.
+- Sort position.
+
+`custom_list_items`
+
+- Parent list ID with cascade delete.
+- Content type.
+- Stream/content ID.
+- Provider/profile identity where applicable.
+- Added timestamp and sort position.
+- Composite uniqueness constraint preventing duplicate membership.
+
+Store references and minimal fallback display metadata only. Resolve current content through repositories so renamed artwork/titles can update.
+
+### Behavior
+
+- Create, rename, reorder, and delete a list.
+- Add/remove items from Live, Movies, Series, Search, and Favorites context menus.
+- Multi-list membership is supported.
+- Missing provider content shows as unavailable and can be removed.
+- Deleting a list never deletes provider content or Favorites.
+- No drag-only interaction; D-pad reorder actions are required.
+
+### Migration verification
+
+- Export/verify Room schemas.
+- Add a migration test that opens a representative v10 database as v11.
+- Confirm all prior recordings, favorites, history, profiles, and settings remain intact.
+- Confirm foreign keys and indexes exist after migration.
+
+---
+
+## 11. P2 — Lightweight previews
+
+The term preview means artwork preview by default, not autoplay video.
+
+- On sustained focus (about 700–900 ms), crossfade to a cached backdrop or richer metadata panel.
+- Cancel immediately when focus moves.
+- Prefetch only the focused item and at most one likely neighbor.
+- Never create a second ExoPlayer, LibVLC, or MPV instance on Firestick builds.
+- If a future Premium-only video preview is tested, it must reuse a single lifecycle-owned preview engine, remain muted, obey data-saving/reduced-motion settings, stop on navigation, and be feature-flagged off by default.
+
+Acceptance:
+
+- Fast D-pad scrolling causes no preview flicker or request storm.
+- Leaving the screen cancels all pending work.
+- Preview failure falls back silently to static artwork.
+- No audible audio and no decoder leak.
+
+---
+
+## 12. P2 — Splash polish
+
+- Keep the system launch screen immediate.
+- The in-app splash may use the bundled brand asset/video only when startup work genuinely remains.
+- Never delay entry just to finish an animation.
+- Cap the animation duration and provide a reduced-motion/static path.
+- Avoid infinite scanlines, pulsing, or shader-heavy effects on low-memory devices.
+- Navigation away from Splash must occur exactly once.
+
+---
+
+## 13. Security and release hygiene
+
+Before building v4.7.0:
+
+- Remove signing store/key passwords from tracked `android/app/build.gradle.kts`.
+- Load secrets from an untracked properties file or environment variables and fail release builds with a clear message when missing.
+- Verify the keystore itself is intentionally stored and backed up; do not rotate it casually because updates require the same signing identity.
+- Redact provider credentials, playlist URLs, authorization headers, and tokens from logs/crash reports.
+- Keep network security allowances no broader than required for IPTV providers.
+- Verify exported components, FileProvider paths, URI grants, and foreground-service declarations.
+- Document why `MANAGE_EXTERNAL_STORAGE`, exact alarm permissions, and package-install permission are needed; remove any permission not exercised by a shipped feature.
+- If distribution includes Google Play, create a compliant flavor because broad storage/package-install permissions may not be acceptable there.
+
+---
+
+## 14. Dependency policy
+
+Do not add Accompanist Permissions for this pass unless a concrete runtime-permission flow requires it. Storage Access Framework uses activity-result contracts and persisted URI grants; it does not require Accompanist Permissions.
+
+The repository already includes Kotlin serialization and DocumentFile. Reuse existing dependencies.
+
+For every new dependency:
+
+- Confirm it is maintained and compatible with Kotlin 2.2.10, the Compose plugin, minSdk 21, targetSdk 35, and R8.
+- Record why it is necessary and its APK/method impact.
+- Prefer AndroidX or a small local implementation for simple behavior.
+- Run dependency/license and release-build checks.
+
+No dependency should be added for a future-only commented feature.
+
+---
+
+## 15. Implementation order
+
+Work in small, independently verifiable slices:
+
+1. Create a checkpoint of the current dirty worktree without discarding unrelated user changes.
+2. Capture baseline builds and performance measurements.
+3. Fix signing configuration and diagnostics redaction.
+4. Implement DVR state/telemetry/storage tests; validate on physical Fire TV with the target USB setup.
+5. Implement Search favorite integration and tests.
+6. Add semantic design tokens and shared focus/components.
+7. Upgrade Live EPG and category ranking with unit tests.
+8. Upgrade Home, Settings, and navigation.
+9. Run the performance/accessibility pass.
+10. If gates remain green, add Custom Lists with Room 10 -> 11 migration.
+11. If gates remain green, add artwork previews and splash polish.
+12. Run full release qualification and only then bump/publish OTA metadata.
+
+Compile after each slice. Do not defer all integration errors to the end.
+
+---
+
+## 16. Required test matrix
+
+### Automated
+
+- Unit tests for storage target ranking/probe results.
+- Unit tests for recording progress and state transitions.
+- DAO tests for composite Favorites identity and atomic toggle.
+- Room 10 -> 11 migration test if Custom Lists ships.
+- Unit tests for region alias matching/ranking.
+- Unit tests for EPG Now/Next ordering, timezone, DST, and malformed entries.
+- Compose/UI tests for focus restoration, Search context menu, empty/error states, and Back behavior where reliable.
+- `lint`, unit tests, debug compile, both release flavor builds, and R8/minification.
+
+### Physical-device qualification
+
+- Fire TV Stick 4K-class device / Fire OS target.
+- Modern ARM64 Android TV device.
+- 720p and 1080p output; 4K where available.
+- Remote-only navigation.
+- USB absent, one partition, and two-partition target setup.
+- Cold launch, process recreation, reboot, network loss/recovery, storage removal/reinsert.
+- 30-minute Live playback, VOD playback, timeshift, and recording soak tests.
+- Low-space and low-memory scenarios.
+- Upgrade install over the current signed production build with data preserved.
+
+---
+
+## 17. Definition of done / release gates
+
+All boxes must be checked before calling v4.7.0 final:
+
+### Build and data
+
+- [ ] Firestick release APK builds with R8 and installs.
+- [ ] Premium release APK builds with R8 and installs.
+- [ ] Existing signed installation upgrades without uninstalling.
+- [ ] Room migration test passes; no user data loss.
+- [ ] Version is `4.7.0`, `versionCode 68`.
+- [ ] OTA metadata is updated only after final APK hashes/URLs are known.
+
+### Critical behavior
+
+- [ ] DVR writes a playable, non-zero file to the intended USB target.
+- [ ] DVR reports truthful elapsed time/bytes/progress and actionable failures.
+- [ ] Search favorites work for Live, Movie, and Series without ID collision.
+- [ ] Playback, timeshift, scheduled recording, and resume behavior have no regression.
+
+### TV experience
+
+- [ ] All screens are remote-only navigable with deterministic/restored focus.
+- [ ] Home and EPG states handle loading, empty, error, and stale data.
+- [ ] Region ordering never hides unmatched content by default.
+- [ ] Motion can be reduced and UI remains readable at supported resolutions/font scale.
+
+### Quality and operations
+
+- [ ] No secrets in source, APK configuration, logs, or copied diagnostics.
+- [ ] No crash/ANR/OOM in the defined soak test.
+- [ ] Performance meets budgets or deviations are documented and approved.
+- [ ] Release notes list user-visible changes, known limitations, and rollback path.
+- [ ] A rollback build/OTA plan is prepared before rollout.
+
+---
+
+## 18. Rollout plan
+
+1. Internal install/upgrade test.
+2. Small canary group on the exact Fire TV/USB configuration that exposed DVR 0%.
+3. Observe crash-free sessions, recording success, storage errors, and playback regressions.
+4. Expand rollout only after the canary remains healthy.
+5. Retain the prior signed APK and OTA metadata for rollback.
+
+Success metrics:
+
+- Recording start success rate.
+- Non-zero completed recording rate.
+- Search favorite toggle success rate.
+- Crash-free/ANR-free sessions.
+- Playback start success and time-to-first-frame.
+- OOM rate on Firestick flavor.
+
+---
+
+## Final product statement
+
+DYLANDOS IPTV ULTIMATE v4.7.0 should feel premium because it is fast, predictable, recoverable, and remote-first—not simply because it has more animation. The critical release proof is a successful real-device upgrade, a playable USB recording with truthful telemetry, collision-safe Favorites from Search, preserved user data, and stable playback on the lowest supported Fire TV hardware.

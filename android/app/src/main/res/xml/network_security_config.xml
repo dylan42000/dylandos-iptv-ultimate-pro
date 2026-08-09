@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    DYLANDOS IPTV ULTIMATE — Network Security Config
+
+    IPTV servers universally use plain HTTP for:
+      - poster / thumbnail image URLs (stream_icon, cover)
+      - channel logo URLs (tvg-logo)
+      - Xtream API endpoints (player_api.php, xmltv.php)
+      - Stream URLs (live, VOD, series)
+
+    usesCleartextTraffic="true" in the manifest handles most cases, but
+    FireOS and some Android 10+ OEMs enforce additional cleartext policy at
+    the security config level. This file explicitly allows cleartext HTTP
+    for all domains, ensuring Coil can load HTTP poster images on every device.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <!-- Trust system CAs (needed for HTTPS IPTV servers) -->
+            <certificates src="system" />
+            <!-- Trust user-installed CAs (enterprise/self-signed IPTV server certs) -->
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

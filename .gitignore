@@ -1,0 +1,78 @@
+# Built application files
+*.apk
+*.ap_
+*.aab
+
+# Local configuration file (SDK paths)
+local.properties
+
+# Gradle and Build folders
+.gradle/
+build/
+*/build/
+captures/
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+
+# Mac OS junk files (if applicable)
+.DS_Store
+
+# Node.js dependencies
+node_modules/
+
+# Frontend and Desktop build outputs
+dist/
+release/
+
+# Logs, Heap Dumps and Temp/Agent files
+*.log
+*.hprof
+*.jsonl
+edits.json
+
+# Android Specific Temp/Extraction/Build Logs
+android/_mpv_extract/
+android/.kotlin/
+android/build_release_log_*.txt
+
+# Large files and vendor binaries (>100MB prevention)
+vendor/
+*.exe
+*.dll
+*.so
+*.dylib
+*.dmg
+*.msi
+*.pkg
+*.zip
+*.tar
+*.gz
+*.tgz
+*.rar
+*.7z
+*.iso
+*.bin
+*.mp4
+*.mov
+*.mkv
+*.avi
+# ── Dylandos additions (2026-08-06) ───────────────────────────────
+# Release signing keystore — SECRET. Never commit. CI decodes it from
+# the DYLANDOS_KEYSTORE_BASE64 Actions secret instead.
+*.jks
+
+# Native player libs (mpv / ffmpeg / libvlc) ARE required to build the APK —
+# keep them in git so the repo is self-contained and CI can build. (32 MB)
+!android/app/src/main/jniLibs/
+!android/app/src/main/jniLibs/**
+
+# Stale Android build logs (historical noise)
+android/build_*.txt
+
+# Python tooling (repo scripts)
+__pycache__/
+*.pyc
+.agent/

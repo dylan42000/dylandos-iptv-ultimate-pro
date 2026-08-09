@@ -1,0 +1,42 @@
+{
+  "version": "3.5.0",
+  "versionCode": 42,
+  "releaseDate": "2026-05-02",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "gistId": "6056e65b41641393abf585cecbd92d07",
+  "gistApiUrl": "https://api.github.com/gists/6056e65b41641393abf585cecbd92d07",
+  "changelog": [
+    "FIX: Movies category mapping now normalizes and validates saved category IDs, preventing sticky/empty-category edge cases after provider data shifts.",
+    "FIX: Movies category filtering now uses strict normalized matching across all entry paths, eliminating intermittent zero-result mismatches.",
+    "FIX: Guide program selection now syncs focused channel row to the tapped program row to prevent highlight/program offset drift.",
+    "FIX: Guide left/right synchronized lists now use collision-safe row keys, preventing random row reuse/alignment slips on long channel lists.",
+    "IMPROVEMENT: Guide and Movies state handling hardened for re-entry and dynamic category changes under Firestick D-pad navigation."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "PLACEHOLDER_FIRESTICK_URL",
+      "apkSize": 0,
+      "sha256": "PLACEHOLDER_FIRESTICK_SHA256",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": [
+        "armeabi-v7a"
+      ]
+    },
+    "premium": {
+      "apkUrl": "PLACEHOLDER_PREMIUM_URL",
+      "apkSize": 0,
+      "sha256": "PLACEHOLDER_PREMIUM_SHA256",
+      "minSdk": 21,
+      "targetSdk": 34,
+      "abi": [
+        "arm64-v8a"
+      ]
+    }
+  },
+  "apkUrl": "PLACEHOLDER_FIRESTICK_URL",
+  "apkSize": 0,
+  "sha256": "PLACEHOLDER_FIRESTICK_SHA256",
+  "notes": "STEPS TO PUBLISH:\n1. Build both release flavors (firestick + premium).\n2. Upload APKs to Dropbox and copy direct links (dl=1).\n3. Replace PLACEHOLDER_FIRESTICK_URL in both flavors.firestick.apkUrl and top-level apkUrl.\n4. Replace PLACEHOLDER_PREMIUM_URL in flavors.premium.apkUrl.\n5. Replace placeholder SHA256 and apkSize values for both flavors.\n6. Save this file content as update.json in gist 6056e65b41641393abf585cecbd92d07."
+}
