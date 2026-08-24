@@ -71,6 +71,7 @@ data class SettingsUiState(
     val epgCompactMode: Boolean = false,
     val epgThirdPartyEnabled: Boolean = true,
     val epgThirdPartyUrl: String = EpgSourceDefaults.DEFAULT_URL_BLOCK,
+    val epgTimeOffsetHours: Int = 0,
 
     // Appearance
     val appTheme: AppTheme = AppTheme.NEON_PARADISE,
@@ -131,8 +132,8 @@ data class SettingsUiState(
     val bufferFloorMs: Int = 600,
     /** Adaptive ceiling in ms — the cache never goes above this (was a hard 2000 clamp). */
     val bufferCeilingMs: Int = 4000,
-    /** 0 = auto ring sizing (TimeshiftRingMath), else target rewind window in minutes (30..480). */
-    val timeshiftWindowMinutes: Int = 0,
+    /** 0 = auto ring sizing; 30 min is the Firestick/DVR-friendly default. */
+    val timeshiftWindowMinutes: Int = 30,
 
     // ── Guide Display Settings ─────────────────────────────────────────────────
     val guideHoursToShow: Int = 4,         // 2, 4, 6, 8 hours visible in guide window
@@ -248,6 +249,7 @@ class SettingsViewModel @Inject constructor(
         val KEY_AUDIO_OFFSET_MS      = intPreferencesKey("audio_offset_ms")
         // EPG
         val KEY_EPG_REFRESH_HOURS    = intPreferencesKey("epg_refresh_interval_hours")
+        val KEY_EPG_TIME_OFFSET      = intPreferencesKey("epg_time_offset_hours")
         val KEY_EPG_HOURS_TO_SHOW    = intPreferencesKey("epg_hours_to_show")
         val KEY_EPG_TIME_FORMAT      = stringPreferencesKey("epg_time_format")
         val KEY_EPG_DESCRIPTIONS     = booleanPreferencesKey("epg_show_descriptions")
@@ -395,6 +397,7 @@ class SettingsViewModel @Inject constructor(
             audioOffsetMs          = prefs[KEY_AUDIO_OFFSET_MS]      ?: 0,
             // EPG
             epgRefreshIntervalHours= prefs[KEY_EPG_REFRESH_HOURS]    ?: 4,
+            epgTimeOffsetHours     = prefs[KEY_EPG_TIME_OFFSET]      ?: 0,
             epgHoursToShow         = prefs[KEY_EPG_HOURS_TO_SHOW]    ?: 4,
             epgTimeFormat          = prefs[KEY_EPG_TIME_FORMAT]       ?: "24h",
             epgShowDescriptions    = prefs[KEY_EPG_DESCRIPTIONS]     ?: true,
@@ -449,7 +452,7 @@ class SettingsViewModel @Inject constructor(
             adaptiveBuffer         = prefs[KEY_ADAPTIVE_BUFFER]       ?: true,
             bufferFloorMs          = (prefs[KEY_BUFFER_FLOOR_MS]      ?: 600).coerceIn(300, 2_000),
             bufferCeilingMs        = (prefs[KEY_BUFFER_CEILING_MS]    ?: 4000).coerceIn(600, 8_000),
-            timeshiftWindowMinutes = (prefs[KEY_TIMESHIFT_WINDOW_MIN] ?: 0).coerceIn(0, 480),
+            timeshiftWindowMinutes = (prefs[KEY_TIMESHIFT_WINDOW_MIN] ?: 30).coerceIn(0, 480),
             // Guide display
             guideHoursToShow       = prefs[KEY_GUIDE_HOURS]          ?: 4,
             guideRowHeightMode     = prefs[KEY_GUIDE_ROW_HEIGHT]      ?: "Normal",
@@ -753,8 +756,20 @@ class SettingsViewModel @Inject constructor(
 
     // ── EPG setters ────────────────────────────────────────────────────────────
     fun setEpgRefreshHours(v: Int)         { save { it[KEY_EPG_REFRESH_HOURS]   = v }; _state.value = _state.value.copy(epgRefreshIntervalHours = v) }
+    fun setEpgTimeOffsetHours(v: Int)      {
+        save {
+            it[KEY_EPG_TIME_OFFSET] = v
+            // Force XMLTV re-fetch with new offset on next Guide view
+            it[stringPreferencesKey("xmltv_last_fetch_ms")] = "0"
+        }
+        xtreamRepository.clearEpgMemoryCache()
+        _state.value = _state.value.copy(epgTimeOffsetHours = v)
+    }
     fun setEpgHoursToShow(v: Int)          { save { it[KEY_EPG_HOURS_TO_SHOW]   = v }; _state.value = _state.value.copy(epgHoursToShow = v) }
-    fun setEpgTimeFormat(v: String)        { save { it[KEY_EPG_TIME_FORMAT]      = v }; _state.value = _state.value.copy(epgTimeFormat = v) }
+    fun setEpgTimeFormat(v: String)        {
+        save { it[KEY_EPG_TIME_FORMAT] = v }
+        _state.value = _state.value.copy(epgTimeFormat = v)
+    }
     fun setEpgShowDescriptions(v: Boolean) { save { it[KEY_EPG_DESCRIPTIONS]    = v }; _state.value = _state.value.copy(epgShowDescriptions = v) }
     fun setEpgCompactMode(v: Boolean)      { save { it[KEY_EPG_COMPACT]         = v }; _state.value = _state.value.copy(epgCompactMode = v) }
     fun setEpgThirdPartyEnabled(v: Boolean) { save { it[KEY_EPG_THIRD_PARTY_ENABLED] = v }; _state.value = _state.value.copy(epgThirdPartyEnabled = v) }

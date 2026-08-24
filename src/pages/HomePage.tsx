@@ -14,6 +14,11 @@ interface HomePageProps {
   channels: XtreamChannel[];
   movies: XtreamMovie[];
   series: XtreamSeries[];
+  vodCategoriesCount?: number;
+  seriesCategoriesCount?: number;
+  totalChannelsCount?: number;
+  totalMoviesCount?: number;
+  totalSeriesCount?: number;
   favorites: string[];
   epgData?: EPGData | null;
   profileId?: string | null;
@@ -240,6 +245,11 @@ export const HomePage: React.FC<HomePageProps> = ({
   channels,
   movies,
   series,
+  vodCategoriesCount,
+  seriesCategoriesCount,
+  totalChannelsCount,
+  totalMoviesCount,
+  totalSeriesCount,
   favorites,
   epgData,
   profileId,
@@ -318,6 +328,18 @@ export const HomePage: React.FC<HomePageProps> = ({
     return (withEpg.length > 0 ? withEpg : channels).slice(0, 15);
   }, [channels, epgData]);
 
+  const channelLabel = `${totalChannelsCount ?? channels.length} Channels`;
+  const movieLabel = totalMoviesCount !== undefined
+    ? `${totalMoviesCount} Movies`
+    : (vodCategoriesCount !== undefined && vodCategoriesCount > 0
+      ? `${vodCategoriesCount} Movie Categories`
+      : `${movies.length} Movies`);
+  const seriesLabel = totalSeriesCount !== undefined
+    ? `${totalSeriesCount} Series`
+    : (seriesCategoriesCount !== undefined && seriesCategoriesCount > 0
+      ? `${seriesCategoriesCount} Series Categories`
+      : `${series.length} Series`);
+
   return (
     <div className="flex-1 overflow-y-auto scrollbar-none">
       {/* Hero Banner */}
@@ -333,13 +355,13 @@ export const HomePage: React.FC<HomePageProps> = ({
         </div>
         <div className="flex items-center gap-4 text-white/30 text-xs">
           <button onClick={() => onNavigate('live')} className="flex items-center gap-1.5 hover:text-white/60 transition-colors">
-            <Tv size={13} />{channels.length} Channels
+            <Tv size={13} />{channelLabel}
           </button>
           <button onClick={() => onNavigate('movies')} className="flex items-center gap-1.5 hover:text-white/60 transition-colors">
-            <Film size={13} />{movies.length} Movies
+            <Film size={13} />{movieLabel}
           </button>
           <button onClick={() => onNavigate('series')} className="flex items-center gap-1.5 hover:text-white/60 transition-colors">
-            <Layout size={13} />{series.length} Series
+            <Layout size={13} />{seriesLabel}
           </button>
           <button onClick={() => onNavigate('search')} className="flex items-center gap-1.5 hover:text-white/60 transition-colors">
             <Search size={13} />Search

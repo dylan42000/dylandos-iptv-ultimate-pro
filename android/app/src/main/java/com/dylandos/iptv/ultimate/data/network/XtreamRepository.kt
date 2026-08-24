@@ -736,15 +736,7 @@ class XtreamRepository @Inject constructor(
     private fun normalizeEpgEpochSeconds(value: Long): Long =
         if (value > 20_000_000_000L) value / 1_000L else value
 
-    /**
-     * Prefer the panel's Unix epoch when valid. Wall-clock `start`/`end` strings without
-     * an offset are treated as **UTC** first (Xtream norm). Parsing them in the provider
-     * geographic zone (e.g. America/Denver) made Mountain Firesticks show times ~6 hours
-     * ahead (7:29 AM when it was really 1:29 AM MDT).
-     *
-     * If a numeric epoch agrees with the provider-zone reading of a UTC-intended string
-     * (panel bug / PHP strtotime in server TZ), we correct back to the UTC wall reading.
-     */
+    /** Parse an offset-less provider wall-clock value when no usable Unix epoch exists. */
     private fun parseEpgWallClockSeconds(raw: String, timeZone: TimeZone): Long {
         val value = raw.trim()
         if (!Regex("^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}(:\\d{2})?$").matches(value)) {
@@ -759,48 +751,32 @@ class XtreamRepository @Inject constructor(
         }.getOrDefault(0L)
     }
 
+    /**
+     * Xtream XMLTV and short-EPG wall-clock values are conventionally UTC when they omit
+     * an offset. Applying server_info.timezone to those values creates an exact whole-zone
+     * error (six hours in Mountain daylight time). Prefer a valid epoch, but correct the
+     * common panel bug where its epoch was generated from a UTC string as server-local time.
+     */
     private fun reconcileProviderEpgTime(raw: String, epochSeconds: Long): Long {
         val providerEpoch = normalizeEpgEpochSeconds(epochSeconds)
         val utcWall = parseEpgWallClockSeconds(raw, TimeZone.getTimeZone("UTC"))
         val providerWall = parseEpgWallClockSeconds(raw, providerTimeZone())
-
         if (providerEpoch > 1_000_000_000L) {
             if (utcWall > 0L && providerWall > 0L && utcWall != providerWall) {
                 val matchesUtc = kotlin.math.abs(providerEpoch - utcWall) <= 180L
                 val matchesProvider = kotlin.math.abs(providerEpoch - providerWall) <= 180L
-                // Epoch equals provider-local parse of a string that is actually UTC →
-                // times land ~|offset| hours ahead on Firestick (Mountain = ~6h in summer).
                 if (matchesProvider && !matchesUtc) {
                     Timber.d(
-                        "EPG: correcting TZ-skewed epoch $providerEpoch → UTC wall $utcWall " +
+                        "EPG: correcting server-local epoch $providerEpoch → UTC wall $utcWall " +
                             "(provider=${providerTimeZone().id})"
                     )
                     return utcWall
                 }
-                // Epoch closer to the geographic-zone parse than to UTC (within 3 min of
-                // either reading's hour bucket) — still treat wall clock as UTC.
-                if (!matchesUtc) {
-                    val deltaProv = kotlin.math.abs(providerEpoch - providerWall)
-                    val deltaUtc = kotlin.math.abs(providerEpoch - utcWall)
-                    val skewHours = kotlin.math.abs(providerWall - utcWall) / 3_600L
-                    if (deltaProv < deltaUtc && skewHours in 4L..9L && deltaProv <= 180L) {
-                        Timber.d(
-                            "EPG: correcting near-provider epoch $providerEpoch → UTC wall $utcWall"
-                        )
-                        return utcWall
-                    }
-                }
             }
-            // No usable wall clock, but epoch is classic hours ahead of device "now"
-            // relative to a typical programme mid — leave for alignEpgProgramsToNow.
             return providerEpoch
         }
 
-        return when {
-            utcWall > 0L -> utcWall
-            providerWall > 0L -> providerWall
-            else -> providerEpoch
-        }
+        return utcWall.takeIf { it > 0L } ?: providerEpoch
     }
 
     /**
@@ -832,27 +808,44 @@ class XtreamRepository @Inject constructor(
     }
 
     /** Apply Base64 decoding and timestamp normalization to every program. */
-    private fun decodeEpgPrograms(programs: List<XtreamEpgProgram>): List<XtreamEpgProgram> {
+    private fun decodeEpgPrograms(
+        programs: List<XtreamEpgProgram>,
+        timeOffsetHours: Int = 0
+    ): List<XtreamEpgProgram> {
+        val offsetSec = timeOffsetHours * 3600L
         val decoded = programs.map { p ->
             val startText = decodeEpgString(p.start)
             val endText = decodeEpgString(p.end)
+            val rawStartSec = reconcileProviderEpgTime(startText, p.startTimestamp)
+            val rawEndSec = reconcileProviderEpgTime(endText, p.stopTimestamp)
             p.copy(
                 title       = decodeEpgString(p.title),
                 description = p.description?.let { decodeEpgString(it) },
                 start       = startText,
                 end         = endText,
-                startTimestamp = reconcileProviderEpgTime(startText, p.startTimestamp),
-                stopTimestamp = reconcileProviderEpgTime(endText, p.stopTimestamp)
+                startTimestamp = if (rawStartSec > 0L) rawStartSec + offsetSec else 0L,
+                stopTimestamp  = if (rawEndSec > 0L) rawEndSec + offsetSec else 0L
             )
         }
         return alignEpgProgramsToNow(decoded)
+    }
+
+    /** Clear in-memory short EPG cache when timezone/offset or account changes. */
+    fun clearEpgMemoryCache() {
+        synchronized(shortEpgCache) {
+            shortEpgCache.clear()
+        }
     }
 
     /**
      * Get short EPG (current + next N programs) for a single live stream.
      * Used in Live TV channel list to show "now playing" info.
      */
-    suspend fun getShortEpg(streamId: Int, limit: Int = 4): Result<List<XtreamEpgProgram>> =
+    suspend fun getShortEpg(
+        streamId: Int,
+        limit: Int = 4,
+        timeOffsetHours: Int = 0
+    ): Result<List<XtreamEpgProgram>> =
         withContext(Dispatchers.IO) {
             synchronized(shortEpgCache) {
                 shortEpgCache[streamId]
@@ -864,7 +857,7 @@ class XtreamRepository @Inject constructor(
                     "stream_id" to streamId.toString(),
                     "limit" to limit.toString()))
                 val listing = gson.fromJson(body, XtreamEpgListing::class.java)
-                val decoded = decodeEpgPrograms(listing.epgListings)
+                val decoded = decodeEpgPrograms(listing.epgListings, timeOffsetHours)
                 synchronized(shortEpgCache) {
                     shortEpgCache[streamId] = CacheEntry(decoded)
                 }
@@ -880,12 +873,15 @@ class XtreamRepository @Inject constructor(
      * Used in the cable-style Guide to populate a 4-hour window.
      * FIX: Base64-decode all titles/descriptions before returning.
      */
-    suspend fun getSimpleDataTable(streamId: Int): Result<List<XtreamEpgProgram>> =
+    suspend fun getSimpleDataTable(
+        streamId: Int,
+        timeOffsetHours: Int = 0
+    ): Result<List<XtreamEpgProgram>> =
         withContext(Dispatchers.IO) {
             try {
                 val body = get(apiUrl("get_simple_data_table", "stream_id" to streamId.toString()))
                 val listing = gson.fromJson(body, XtreamEpgListing::class.java)
-                Result.success(decodeEpgPrograms(listing.epgListings))  // Base64 decode
+                Result.success(decodeEpgPrograms(listing.epgListings, timeOffsetHours))
             } catch (e: Exception) {
                 Timber.e(e, "Failed to fetch EPG table for stream $streamId")
                 Result.failure(e)
@@ -895,15 +891,11 @@ class XtreamRepository @Inject constructor(
     /**
      * Batch load short EPG for a list of channels.
      * Returns a map of streamId -> list of decoded programs.
-     *
-     * FIX: All titles/descriptions are Base64-decoded before returning.
-     * FIX: Requests are chunked in batches of 10 with a 200ms pause between
-     *      chunks to avoid overwhelming the IPTV server. Previously 20-per-chunk
-     *      with 100ms delays caused connection pool saturation and UI freezing.
      */
     suspend fun batchShortEpg(
         streamIds: List<Int>,
-        limit: Int = 4
+        limit: Int = 4,
+        timeOffsetHours: Int = 0
     ): Map<Int, List<XtreamEpgProgram>> = withContext(Dispatchers.IO) {
         val result = mutableMapOf<Int, List<XtreamEpgProgram>>()
         val missingIds = ArrayList<Int>(streamIds.size)
@@ -931,7 +923,7 @@ class XtreamRepository @Inject constructor(
                                         "stream_id" to id.toString(),
                                         "limit" to limit.toString()))
                                     val programs = gson.fromJson(body, XtreamEpgListing::class.java).epgListings
-                                    decodeEpgPrograms(programs)
+                                    decodeEpgPrograms(programs, timeOffsetHours)
                                 } catch (e: Exception) {
                                     Timber.w("EPG fetch failed for $id: ${e.message}")
                                     emptyList<XtreamEpgProgram>()
@@ -980,7 +972,8 @@ class XtreamRepository @Inject constructor(
      * Falls back to empty result on any error — short EPG API is the fallback.
      */
     suspend fun fetchXmltvEpg(
-        acceptedChannelIds: Set<String> = emptySet()
+        acceptedChannelIds: Set<String> = emptySet(),
+        timeOffsetHours: Int = 0
     ): XmltvParser.ParseResult = withContext(Dispatchers.IO) {
         if (!isConnected || serverUrl.isEmpty()) {
             return@withContext XmltvParser.ParseResult(emptyList(), emptyMap())
@@ -1000,12 +993,15 @@ class XtreamRepository @Inject constructor(
                     return@withContext XmltvParser.ParseResult(emptyList(), emptyMap())
                 }
             val parsed = xmltvStream(stream, url, response.header("Content-Encoding")).use {
-                // Provider xmltv.php almost always stamps UTC (often with +0000). Using the
-                // geographic server_info timezone for offset-less rows skewed Mountain by ~6h.
+                // XMLTV rows with an explicit +/-HHMM suffix are absolute. Xtream's
+                // offset-less xmltv.php rows are conventionally UTC too; parsing them in
+                // server_info.timezone applies the provider offset a second time and was
+                // the six-hour Firestick guide defect.
                 XmltvParser.parse(
                     it,
                     acceptedChannelIds,
-                    sourceTimeZone = TimeZone.getTimeZone("UTC")
+                    sourceTimeZone = TimeZone.getTimeZone("UTC"),
+                    timeOffsetHours = timeOffsetHours
                 )
             }
             response.close()

@@ -108,10 +108,15 @@ fun HomeScreen(
 
             // ── Fast Firestick dashboard ─────────────────────────────────────
             item {
+                val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+                val isNarrow = screenWidthDp < 600
+                val columns = if (isNarrow) 2 else 4
+                val gridHeight = if (isNarrow) 480.dp else 278.dp
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 8.dp)
+                        .padding(horizontal = if (isNarrow) 14.dp else 24.dp, vertical = 8.dp)
                 ) {
                     Text(
                         text = "Start Watching",
@@ -121,12 +126,12 @@ fun HomeScreen(
                         modifier = Modifier.padding(bottom = 10.dp)
                     )
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(4),
+                        columns = GridCells.Fixed(columns),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(278.dp),
+                            .height(gridHeight),
                         userScrollEnabled = false
                     ) {
                         items(quickAccessItems) { item ->

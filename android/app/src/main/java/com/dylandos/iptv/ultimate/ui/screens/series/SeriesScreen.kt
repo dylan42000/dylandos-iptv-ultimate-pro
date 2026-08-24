@@ -143,10 +143,13 @@ fun SeriesScreen(
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
+    var shouldRestoreFocusOnResume by remember { mutableStateOf(false) }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.consumePendingOpenIfAny()
+                shouldRestoreFocusOnResume = true
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -157,25 +160,48 @@ fun SeriesScreen(
         uiState.selectedSeries?.seriesId?.let { viewModel.loadSelectedSeriesDetails(it) }
     }
 
-    // Focus the category rail ONE TIME when categories first become available.
-    // Subsequent data reloads (cache refresh, category switch) do NOT re-focus.
-    LaunchedEffect(uiState.categories.isNotEmpty(), lazySeries.itemCount, initialFocusDone) {
-        if (uiState.categories.isNotEmpty() && !initialFocusDone) {
-            initialFocusDone = true
-            kotlinx.coroutines.delay(120)
-            val maxIdx = (uiState.itemCount - 1).coerceAtLeast(0)
-            val restoredIndex = (uiState.focusedRow * SERIES_COLS + uiState.focusedCol)
-                .coerceIn(0, maxIdx)
-            val shouldRestoreGrid =
-                uiState.itemCount > 0 &&
-                (uiState.gridFirstVisibleItemIndex > 0 || restoredIndex > 0 || uiState.selectedCategoryId != "ALL")
+    // Focus restoration on initial load AND on resume from details/player
+    LaunchedEffect(
+        uiState.categories.isNotEmpty(),
+        uiState.itemCount,
+        lazySeries.itemCount,
+        shouldRestoreFocusOnResume,
+        initialFocusDone
+    ) {
+        val needsInitial = uiState.categories.isNotEmpty() && uiState.itemCount > 0 && lazySeries.itemCount > 0 && !initialFocusDone
+        val needsResume = shouldRestoreFocusOnResume && uiState.itemCount > 0 && lazySeries.itemCount > 0
 
-            if (shouldRestoreGrid) {
-                runCatching { seriesGridState.scrollToItem(restoredIndex) }
-                runCatching { gridEntryFR.requestFocus() }
-            } else {
-                runCatching { categoryFR.requestFocus() }
+        if (!needsInitial && !needsResume) return@LaunchedEffect
+
+        if (needsInitial) initialFocusDone = true
+        if (needsResume) shouldRestoreFocusOnResume = false
+
+        val maxIdx = (uiState.itemCount - 1).coerceAtLeast(0)
+        val restoredIndex = (uiState.focusedRow * SERIES_COLS + uiState.focusedCol).coerceIn(0, maxIdx)
+        val shouldRestoreGrid = uiState.itemCount > 0 &&
+            (uiState.gridFirstVisibleItemIndex > 0 || restoredIndex > 0 || uiState.selectedCategoryId != "ALL" || needsResume)
+
+        if (shouldRestoreGrid) {
+            runCatching { seriesGridState.scrollToItem(restoredIndex) }
+            delay(48)
+            runCatching { firstPosterBringIntoView.bringIntoView() }
+            val deadline = System.nanoTime() + 2_500_000_000L
+            while (System.nanoTime() < deadline) {
+                withFrameNanos { }
+                runCatching { firstPosterBringIntoView.bringIntoView() }
+                val focused = try {
+                    when (val result: Any = gridEntryFR.requestFocus()) {
+                        is Boolean -> result
+                        else -> true
+                    }
+                } catch (_: Throwable) {
+                    false
+                }
+                if (focused) break
+                delay(48)
             }
+        } else {
+            runCatching { categoryFR.requestFocus() }
         }
     }
 
@@ -445,7 +471,10 @@ fun SeriesScreen(
                                 .coerceIn(0, (uiState.itemCount - 1).coerceAtLeast(0)),
                             categoryFR = categoryFR,
                             onItemFocused = { row, col -> viewModel.setFocus(row, col) },
-                            onItemSelected = { series -> viewModel.openSeries(series) },
+                            onItemSelected = { series, row, col ->
+                                viewModel.setFocus(row, col)
+                                viewModel.openSeries(series)
+                            },
                             onToggleFavorite = { series -> viewModel.toggleSeriesFavorite(series.seriesId) },
                             modifier = Modifier
                                 .fillMaxHeight()
@@ -774,7 +803,7 @@ private fun SeriesPosterGrid(
     entryItemIndex: Int,
     categoryFR: FocusRequester,
     onItemFocused: (row: Int, col: Int) -> Unit,
-    onItemSelected: (XtreamSeries) -> Unit,
+    onItemSelected: (XtreamSeries, Int, Int) -> Unit,
     onToggleFavorite: (XtreamSeries) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -802,7 +831,7 @@ private fun SeriesPosterGrid(
                 focusRequester = if (index == entryItemIndex) entryItemFR else null,
                 bringIntoViewRequester = if (index == entryItemIndex) entryBringIntoView else null,
                 onFocused = { onItemFocused(row, col) },
-                onSelected = { onItemSelected(s) },
+                onSelected = { onItemSelected(s, row, col) },
                 onToggleFavorite = { onToggleFavorite(s) },
                 onLeftEdge = { try { categoryFR.requestFocus() } catch (_: Exception) {} }
             )

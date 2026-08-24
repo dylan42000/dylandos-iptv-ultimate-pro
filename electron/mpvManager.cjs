@@ -50,6 +50,7 @@ function resolveMpvBinary() {
       ]
     : [
         path.join(process.cwd(), 'vendor', 'mpv', 'mpv.exe'),
+        path.join(__dirname, '..', 'vendor', 'mpv', 'mpv.exe'),
         path.join(process.cwd(), 'resources', 'mpv', 'mpv.exe'),
         path.join(
           process.cwd(), 'release', 'win-unpacked', 'resources', 'mpv', 'mpv.exe'
@@ -139,7 +140,15 @@ class MPVManager {
       '--screenshot-format=png',
       `--screenshot-directory=${os.homedir()}`,
       '--tls-verify=no',
-      `--user-agent=${DEFAULT_HTTP_USER_AGENT}`,
+      `--user-agent=${DEFAULT_LIVE_USER_AGENT}`,
+      `--http-header-fields=User-Agent: ${DEFAULT_LIVE_USER_AGENT}`,
+      '--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=10,rw_timeout=30000000',
+      '--demuxer-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=10',
+      '--demuxer-lavf-probesize=10000000',
+      '--demuxer-lavf-analyzeduration=10',
+      '--ytdl=no',
+      '--cache=yes',
+      '--cache-pause-initial=no',
       '--referrer=',
       '--network-timeout=30',
       '--cache-pause=no',
@@ -294,36 +303,53 @@ class MPVManager {
 
     const merged  = { ...this._settings, ...settings };
     const preset  = merged.liveBufferPreset ?? 'medium';
-    const bufMap  = {
-      low:    { cacheSecs: 10, maxBytes: '96MiB',  backBytes: '48MiB',  readaheadSecs: 8  },
-      medium: { cacheSecs: 20, maxBytes: '192MiB', backBytes: '96MiB',  readaheadSecs: 14 },
-      high:   { cacheSecs: 40, maxBytes: '320MiB', backBytes: '160MiB', readaheadSecs: 24 },
+    const timeshiftSize = merged.liveTimeshiftBufferSize ?? 'large';
+
+    const timeshiftMap = {
+      standard: { cacheSecs: 600,  maxBytes: '256MiB',  backBytes: '256MiB',  readaheadSecs: 30 },
+      large:    { cacheSecs: 1800, maxBytes: '512MiB',  backBytes: '512MiB',  readaheadSecs: 60 },
+      max:      { cacheSecs: 3600, maxBytes: '1024MiB', backBytes: '1024MiB', readaheadSecs: 120 },
+      ultra:    { cacheSecs: 7200, maxBytes: '2048MiB', backBytes: '2048MiB', readaheadSecs: 240 },
     };
-    const buf     = bufMap[preset] ?? bufMap.medium;
+
+    const bufMap  = {
+      low:    { cacheSecs: 15, maxBytes: '128MiB', backBytes: '64MiB',  readaheadSecs: 10 },
+      medium: { cacheSecs: 30, maxBytes: '256MiB', backBytes: '128MiB', readaheadSecs: 20 },
+      high:   { cacheSecs: 60, maxBytes: '512MiB', backBytes: '256MiB', readaheadSecs: 40 },
+    };
+
+    const timeshift = merged.liveTimeshiftEnabled !== false;
+    this._timeshiftEnabled = timeshift;
+    const buf = timeshift
+      ? (timeshiftMap[timeshiftSize] ?? timeshiftMap.large)
+      : (bufMap[preset] ?? bufMap.medium);
+
     const liveUA  = merged.liveUserAgent  || DEFAULT_LIVE_USER_AGENT;
     // Use auto (not auto-safe) — gpu-next + auto-safe are incompatible with DWM embedding.
     const hwdec   = merged.hardwareDecode !== false ? 'auto' : 'no';
     const adDelay = isFinite(merged.audioOffsetMs) ? merged.audioOffsetMs / 1000 : 0;
-    const timeshift = merged.liveTimeshiftEnabled !== false;
-    this._timeshiftEnabled = timeshift;
 
-    console.log('[MPVManager] loadLiveStream', { url, preset, liveUA, hwdec, timeshift });
+    console.log('[MPVManager] loadLiveStream', { url, preset, timeshiftSize, liveUA, hwdec, timeshift, buf });
 
     try {
       await this.mpv.setProperty('user-agent',             liveUA);
+      await this.mpv.setProperty('http-header-fields',     `User-Agent: ${liveUA}`);
+      await this.mpv.setProperty('stream-lavf-o',          'reconnect=1,reconnect_streamed=1,reconnect_delay_max=10,rw_timeout=30000000');
+      await this.mpv.setProperty('demuxer-lavf-o',         'reconnect=1,reconnect_streamed=1,reconnect_delay_max=10');
+      await this.mpv.setProperty('demuxer-lavf-probesize', '10000000');
+      await this.mpv.setProperty('demuxer-lavf-analyzeduration', '10');
+      await this.mpv.setProperty('ytdl',                   'no');
       await this.mpv.setProperty('cache',                  'yes');
       await this.mpv.setProperty('cache-secs',             buf.cacheSecs);
+      await this.mpv.setProperty('cache-pause-initial',    'no');
       // Pause-live parity: keep demuxer back-buffer scrubbable while paused
       await this.mpv.setProperty('cache-pause',            timeshift ? 'yes' : 'no');
+      await this.mpv.setProperty('cache-pause-wait',       0);
       await this.mpv.setProperty('demuxer-max-bytes',      buf.maxBytes);
       await this.mpv.setProperty('demuxer-max-back-bytes', buf.backBytes);
       await this.mpv.setProperty('demuxer-readahead-secs', buf.readaheadSecs);
-      await this.mpv.setProperty('stream-buffer-size',     '12MiB');
-      // NOTE: hwdec and vo are intentionally NOT re-set here.
-      // Calling setProperty('vo', 'gpu') triggers a VO teardown+reinit inside MPV.
-      // The subsequent load() races against that reinit — video frames are decoded
-      // before the swapchain is ready, producing audio-with-black-video.
-      // Both are already fixed at spawn time (extraArgs) and locked once in initialize().
+      await this.mpv.setProperty('demuxer-seekable-cache', timeshift ? 'yes' : 'no');
+      await this.mpv.setProperty('stream-buffer-size',     '16MiB');
       await this.mpv.setProperty('network-timeout',        30);
       await this.mpv.setProperty('hr-seek',                timeshift ? 'yes' : 'no');
       await this.mpv.setProperty('audio-delay',            adDelay);
@@ -476,15 +502,17 @@ class MPVManager {
   // --- Playback State --------------------------------------------------------
   async getPlaybackState() {
     if (!this.isInitialized || !this.mpv) {
-      return { position: 0, duration: 0, pause: false, volume: 1, mute: false };
+      return { position: 0, duration: 0, pause: false, volume: 1, mute: false, cacheDuration: 0, cacheState: null };
     }
     try {
-      const [position, duration, pause, volume, mute] = await Promise.all([
+      const [position, duration, pause, volume, mute, cacheDuration, cacheState] = await Promise.all([
         this.mpv.getProperty('time-pos').catch(() => 0),
         this.mpv.getProperty('duration').catch(() => 0),
         this.mpv.getProperty('pause').catch(() => false),
         this.mpv.getProperty('volume').catch(() => 100),
         this.mpv.getProperty('mute').catch(() => false),
+        this.mpv.getProperty('demuxer-cache-duration').catch(() => 0),
+        this.mpv.getProperty('demuxer-cache-state').catch(() => null),
       ]);
       return {
         position: isFinite(position) ? position : 0,
@@ -492,9 +520,22 @@ class MPVManager {
         pause:    Boolean(pause),
         volume:   isFinite(volume) ? volume / 100 : 1,
         mute:     Boolean(mute),
+        cacheDuration: isFinite(cacheDuration) ? cacheDuration : 0,
+        cacheState: typeof cacheState === 'object' ? cacheState : null,
       };
     } catch {
-      return { position: 0, duration: 0, pause: false, volume: 1, mute: false };
+      return { position: 0, duration: 0, pause: false, volume: 1, mute: false, cacheDuration: 0, cacheState: null };
+    }
+  }
+
+  async jumpToLive() {
+    if (!this.isInitialized || !this.mpv) return;
+    try {
+      // In MPV for live streams, seeking forward to 999999 or 0 relative with eof flag jumps to real-time live edge
+      await this.mpv.command('seek', [999999, 'absolute']);
+      await this.mpv.play();
+    } catch (err) {
+      console.warn('[MPVManager] jumpToLive failed:', err.message);
     }
   }
 

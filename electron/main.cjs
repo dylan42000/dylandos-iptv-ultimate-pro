@@ -106,27 +106,62 @@ function sanitizeFileName(input, fallback = 'Recording') {
 
 function getDvrDir() {
   if (dvrOutputDir) return dvrOutputDir;
-  dvrOutputDir = path.join(app.getPath('videos'), 'DYLANDOS IPTV DVR');
-  if (!fsSync.existsSync(dvrOutputDir)) {
-    fsSync.mkdirSync(dvrOutputDir, { recursive: true });
+  if (appSettings && appSettings.dvrOutputDir && typeof appSettings.dvrOutputDir === 'string' && appSettings.dvrOutputDir.trim()) {
+    const custom = path.resolve(appSettings.dvrOutputDir.trim());
+    try {
+      if (!fsSync.existsSync(custom)) {
+        fsSync.mkdirSync(custom, { recursive: true });
+      }
+      dvrOutputDir = custom;
+      return dvrOutputDir;
+    } catch {}
   }
-  return dvrOutputDir;
+  try {
+    const videosPath = app.getPath('videos');
+    dvrOutputDir = path.join(videosPath, 'DYLANDOS IPTV DVR');
+    if (!fsSync.existsSync(dvrOutputDir)) {
+      fsSync.mkdirSync(dvrOutputDir, { recursive: true });
+    }
+    return dvrOutputDir;
+  } catch {
+    dvrOutputDir = path.join(app.getPath('userData'), 'Recordings');
+    if (!fsSync.existsSync(dvrOutputDir)) {
+      fsSync.mkdirSync(dvrOutputDir, { recursive: true });
+    }
+    return dvrOutputDir;
+  }
 }
 
 
 function findFFmpeg() {
-  const bundledPaths = [
+  const candidates = [
+    // Packaged extraResources
     path.join(process.resourcesPath || '', 'ffmpeg', 'ffmpeg.exe'),
+    path.join(process.resourcesPath || '', 'ffmpeg.exe'),
+    path.join(process.resourcesPath || '', 'app.asar.unpacked', 'node_modules', '@ffmpeg-installer', 'win32-x64', 'ffmpeg.exe'),
     path.join(process.resourcesPath || '', 'bin', 'ffmpeg.exe'),
+    // Dev / Unpacked paths
+    path.join(process.cwd(), 'vendor', 'ffmpeg', 'ffmpeg.exe'),
     path.join(__dirname, '..', 'vendor', 'ffmpeg', 'ffmpeg.exe'),
+    path.join(process.cwd(), 'resources', 'ffmpeg', 'ffmpeg.exe'),
+    path.join(process.cwd(), 'release', 'win-unpacked', 'resources', 'ffmpeg', 'ffmpeg.exe'),
   ];
 
-  for (const candidate of bundledPaths) {
-    if (candidate && fsSync.existsSync(candidate)) {
-      return candidate;
+  try {
+    const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+    if (ffmpegInstaller && ffmpegInstaller.path && fsSync.existsSync(ffmpegInstaller.path)) {
+      candidates.unshift(ffmpegInstaller.path);
+    }
+  } catch {}
+
+  for (const c of candidates) {
+    if (c && fsSync.existsSync(c)) {
+      console.log('[Main] Resolved FFmpeg binary:', c);
+      return c;
     }
   }
 
+  console.warn('[Main] FFmpeg binary not found in bundled paths, falling back to system PATH');
   return 'ffmpeg';
 }
 
@@ -136,14 +171,60 @@ function getFFmpegPath() {
 }
 
 async function loadRecordingLibrary() {
+  let library = [];
   try {
     const filePath = path.join(DATA_DIR, DVR_LIBRARY_FILE);
     const raw = await fs.readFile(filePath, 'utf8');
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (Array.isArray(parsed)) library = parsed;
   } catch {
-    return [];
+    library = [];
   }
+
+  // Auto-discover existing .ts, .mp4, and .mkv files in DVR output folder
+  try {
+    const dvrDir = getDvrDir();
+    if (fsSync.existsSync(dvrDir)) {
+      const files = await fs.readdir(dvrDir);
+      const knownPaths = new Set(library.map(item => path.resolve(item.outputPath || '')));
+      let foundNew = false;
+      for (const file of files) {
+        if (!file.match(/\.(ts|mp4|mkv)$/i)) continue;
+        const fullPath = path.resolve(path.join(dvrDir, file));
+        if (!knownPaths.has(fullPath)) {
+          try {
+            const st = await fs.stat(fullPath);
+            if (st.size > 0) {
+              const nameParts = file.replace(/\.[^/.]+$/, '').split(' - ');
+              const chName = nameParts.length > 1 ? nameParts[0] : 'Channel';
+              const progTitle = nameParts.length > 1 ? nameParts.slice(1).join(' - ') : file;
+              library.push({
+                id: `rec_disk_${Buffer.from(file).toString('hex').slice(0, 14)}`,
+                channelName: chName,
+                programTitle: progTitle,
+                streamUrl: '',
+                outputPath: fullPath,
+                filename: file,
+                startTime: (st.birthtime || st.mtime).toISOString(),
+                durationSeconds: null,
+                status: 'completed',
+                size: st.size
+              });
+              knownPaths.add(fullPath);
+              foundNew = true;
+            }
+          } catch {}
+        }
+      }
+      if (foundNew) {
+        await saveRecordingLibrary(library);
+      }
+    }
+  } catch (scanErr) {
+    console.warn('[Main] DVR disk scan warning:', scanErr.message);
+  }
+
+  return library;
 }
 
 async function saveRecordingLibrary(library) {
@@ -880,49 +961,109 @@ function setupIPC() {
       ? requestedRecordingId
       : `rec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+    const maxConcurrent = (typeof appSettings.dvrMaxConcurrent === 'number' && appSettings.dvrMaxConcurrent > 0)
+      ? appSettings.dvrMaxConcurrent
+      : MAX_CONCURRENT_RECORDINGS;
+
     if (recordings.has(recordingId)) {
-      return { success: true, recordingId, duplicate: true, activeCount: recordings.size, maxConcurrent: MAX_CONCURRENT_RECORDINGS };
+      return { success: true, recordingId, duplicate: true, activeCount: recordings.size, maxConcurrent };
     }
 
     for (const [id, active] of recordings.entries()) {
       if (active.meta.streamUrl === streamUrl) {
-        return { success: true, recordingId: id, duplicate: true, activeCount: recordings.size, maxConcurrent: MAX_CONCURRENT_RECORDINGS };
+        return { success: true, recordingId: id, duplicate: true, activeCount: recordings.size, maxConcurrent };
       }
     }
 
-    if (recordings.size >= MAX_CONCURRENT_RECORDINGS) {
+    if (recordings.size >= maxConcurrent) {
       return {
         success: false,
-        error: `Maximum concurrent recordings reached (${MAX_CONCURRENT_RECORDINGS})`,
-        maxConcurrent: MAX_CONCURRENT_RECORDINGS,
+        error: `Maximum concurrent recordings reached (${maxConcurrent})`,
+        maxConcurrent,
       };
     }
 
     const safeChannel = sanitizeFileName(channelName, 'Channel');
     const safeProgram = sanitizeFileName(programTitle, 'Recording');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const filename = `${safeChannel} - ${safeProgram} - ${stamp}.ts`;
+    const formatExt = (appSettings.dvrFormat === 'mp4' ? 'mp4' : appSettings.dvrFormat === 'mkv' ? 'mkv' : 'ts');
+    const filename = `${safeChannel} - ${safeProgram} - ${stamp}.${formatExt}`;
     const outputPath = path.join(outputDir, filename);
+
+    const startedAt = Date.now();
+    const meta = {
+      id: recordingId,
+      channelName: String(channelName || 'Channel'),
+      programTitle: String(programTitle || 'Recording'),
+      streamUrl,
+      outputPath,
+      filename,
+      startTime: new Date(startedAt).toISOString(),
+      durationSeconds: typeof durationSeconds === 'number' && durationSeconds > 0 ? durationSeconds : null,
+      status: 'recording',
+      size: 0,
+    };
+
+    const isHttp = streamUrl.startsWith('http://') || streamUrl.startsWith('https://');
+    const isHls = streamUrl.includes('.m3u8') || streamUrl.includes('/hls/') || streamUrl.includes('m3u8');
+    const userAgent = appSettings.liveUserAgent || 'IPTVSmartersPro';
 
     const args = [
       '-hide_banner',
       '-loglevel', 'warning',
       '-y',
-      // Reconnect flags — keep recording alive through network drops
-      '-reconnect', '1',
-      '-reconnect_streamed', '1',
-      '-reconnect_delay_max', '5',
-      '-timeout', '15000000',
-      '-i', streamUrl,
-      '-map', '0:v:0', '-map', '0:a:0',
-      '-c', 'copy',
     ];
+
+    if (isHttp) {
+      args.push(
+        '-user_agent', userAgent,
+        '-headers', `User-Agent: ${userAgent}\r\n`
+      );
+      if (!isHls) {
+        args.push(
+          '-reconnect', '1',
+          '-reconnect_at_eof', '1',
+          '-reconnect_streamed', '1',
+          '-reconnect_delay_max', '10',
+          '-timeout', '30000000',
+          '-rw_timeout', '30000000'
+        );
+      } else {
+        args.push(
+          '-timeout', '30000000',
+          '-rw_timeout', '30000000'
+        );
+      }
+    }
+
+    args.push(
+      '-probesize', '10000000',
+      '-analyzeduration', '10000000',
+      '-fflags', '+genpts+discardcorrupt'
+    );
+
+    // Sometimes Stalker wraps URLs in 'ffmpeg http://...' - clean it
+    const cleanUrl = streamUrl.startsWith('ffmpeg ') ? streamUrl.replace(/^ffmpeg\s+/, '') : streamUrl;
+
+    args.push(
+      '-i', cleanUrl,
+      '-map', '0:v?',
+      '-map', '0:a?',
+      '-ignore_unknown',
+      '-c', 'copy'
+    );
 
     if (typeof durationSeconds === 'number' && durationSeconds > 0) {
       args.push('-t', String(durationSeconds));
     }
 
-    args.push('-f', 'mpegts', outputPath);
+    if (formatExt === 'mp4') {
+      args.push('-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+faststart', outputPath);
+    } else if (formatExt === 'mkv') {
+      args.push('-f', 'matroska', outputPath);
+    } else {
+      args.push('-f', 'mpegts', outputPath);
+    }
 
     let ffmpegProc;
 
@@ -938,19 +1079,31 @@ function setupIPC() {
       };
     }
 
-    const startedAt = Date.now();
-    const meta = {
-      id: recordingId,
-      channelName: String(channelName || 'Channel'),
-      programTitle: String(programTitle || 'Recording'),
-      streamUrl,
-      outputPath,
-      filename,
-      startTime: new Date(startedAt).toISOString(),
-      durationSeconds: typeof durationSeconds === 'number' && durationSeconds > 0 ? durationSeconds : null,
-      status: 'recording',
-      size: 0,
-    };
+    let lastStderr = '';
+    ffmpegProc.stderr?.on('data', (chunk) => {
+      const text = String(chunk || '').trim();
+      if (!text) return;
+      lastStderr = text;
+      win?.webContents.send('dvr:progress', {
+        recordingId,
+        message: text,
+      });
+    });
+
+    ffmpegProc.on('error', (err) => {
+      console.error(`[DVR ${recordingId}] FFmpeg process error:`, err.message);
+      const active = recordings.get(recordingId);
+      if (active) {
+        recordings.delete(recordingId);
+        if (active.progressTimer) clearInterval(active.progressTimer);
+      }
+      win?.webContents.send('dvr:completed', {
+        recordingId,
+        success: false,
+        error: `FFmpeg process error: ${err.message}`,
+        meta,
+      });
+    });
 
     recordings.set(recordingId, {
       process: ffmpegProc,
@@ -987,12 +1140,11 @@ function setupIPC() {
       const elapsedSeconds = Math.max(1, Math.round((Date.now() - active.startMs) / 1000));
       const completedMeta = {
         ...active.meta,
-        // A user stop may produce a non-zero FFmpeg exit on some providers even
-        // though a valid partial transport stream was flushed to disk.
         status: size > 0 ? 'completed' : 'error',
         size,
         durationSeconds: active.meta.durationSeconds ?? elapsedSeconds,
         stopReason: active.stopRequested ? 'user' : (code === 0 ? 'finished' : 'ffmpeg-error'),
+        error: size === 0 ? (lastStderr || `FFmpeg exited with code ${code}`) : undefined,
       };
 
       await saveRecordingToLibrary(completedMeta);
@@ -1002,14 +1154,6 @@ function setupIPC() {
         success: size > 0,
         code,
         meta: completedMeta,
-      });
-    });
-    ffmpegProc.stderr?.on('data', (chunk) => {
-      const text = String(chunk || '').trim();
-      if (!text) return;
-      win?.webContents.send('dvr:progress', {
-        recordingId,
-        message: text,
       });
     });
 
@@ -1034,7 +1178,7 @@ function setupIPC() {
       recordingId,
       meta,
       activeCount: recordings.size,
-      maxConcurrent: MAX_CONCURRENT_RECORDINGS,
+      maxConcurrent,
     };
   }
 
@@ -1081,6 +1225,9 @@ function setupIPC() {
 
   ipcMain.handle('dvr:list-active', async () => {
     const list = [];
+    const maxConcurrent = (typeof appSettings.dvrMaxConcurrent === 'number' && appSettings.dvrMaxConcurrent > 0)
+      ? appSettings.dvrMaxConcurrent
+      : MAX_CONCURRENT_RECORDINGS;
     for (const [id, active] of recordings.entries()) {
       list.push({
         ...active.meta,
@@ -1090,7 +1237,7 @@ function setupIPC() {
     }
     return {
       recordings: list,
-      maxConcurrent: MAX_CONCURRENT_RECORDINGS,
+      maxConcurrent,
     };
   });
 
@@ -1131,22 +1278,41 @@ function setupIPC() {
       fsSync.writeFileSync(probePath, 'ok');
       fsSync.unlinkSync(probePath);
       dvrOutputDir = candidate;
+      appSettings.dvrOutputDir = candidate;
+      try {
+        const filePath = path.join(DATA_DIR, SETTINGS_FILE);
+        await fs.writeFile(filePath, JSON.stringify(appSettings, null, 2));
+      } catch {}
       return { success: true, outputDir: dvrOutputDir };
     } catch (err) {
       return { success: false, error: `Folder is not writable: ${err.message}` };
     }
   });
 
-  ipcMain.handle('dvr:status', async () => ({
-    activeCount: recordings.size,
-    maxConcurrent: MAX_CONCURRENT_RECORDINGS,
-    ffmpegAvailable: (() => {
-      const ff = getFFmpegPath();
-      if (ff.toLowerCase() === 'ffmpeg') return true;
-      return fsSync.existsSync(ff);
-    })(),
-    outputDir: getDvrDir(),
-  }));
+  ipcMain.handle('dvr:status', async () => {
+    let ffmpegAvailable = false;
+    const ff = getFFmpegPath();
+    if (ff && ff.toLowerCase() !== 'ffmpeg') {
+      ffmpegAvailable = fsSync.existsSync(ff);
+    } else {
+      try {
+        const { execSync } = require('child_process');
+        execSync('ffmpeg -version', { stdio: 'ignore', windowsHide: true });
+        ffmpegAvailable = true;
+      } catch {
+        ffmpegAvailable = false;
+      }
+    }
+    const maxConcurrent = (typeof appSettings.dvrMaxConcurrent === 'number' && appSettings.dvrMaxConcurrent > 0)
+      ? appSettings.dvrMaxConcurrent
+      : MAX_CONCURRENT_RECORDINGS;
+    return {
+      activeCount: recordings.size,
+      maxConcurrent,
+      ffmpegAvailable,
+      outputDir: getDvrDir(),
+    };
+  });
 
   ipcMain.handle('dvr:check-ffmpeg', async () => {
     return await new Promise((resolve) => {
@@ -1219,6 +1385,7 @@ function setupIPC() {
   ipcMain.handle('mpv:seek',
     async (_e, { seconds }) => ensureMpvReady() ? mpvManager.seek(seconds) : null);
   ipcMain.handle('mpv:seek-relative', async (_e, { delta }) => ensureMpvReady() ? mpvManager.seekRelative(delta) : null);
+  ipcMain.handle('mpv:jump-to-live', async () => ensureMpvReady() ? mpvManager.jumpToLive() : null);
 
   ipcMain.handle('mpv:set-volume', async (_e, { level }) => ensureMpvReady() ? mpvManager.setVolume(level) : null);
   ipcMain.handle('mpv:set-mute', async (_e, { muted }) => ensureMpvReady() ? mpvManager.setMute(muted) : null);

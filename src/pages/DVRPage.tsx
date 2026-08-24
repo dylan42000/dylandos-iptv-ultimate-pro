@@ -12,9 +12,11 @@ import {
   AlertCircle,
   Clock,
   CheckCircle2,
+  History,
 } from 'lucide-react';
 import { XtreamChannel } from '../types/xtream';
 import { xtreamApi as xtream } from '../services/xtreamApi';
+import { RecordingButton } from '../components/RecordingButton';
 
 interface RecordingMeta {
   id: string;
@@ -43,6 +45,7 @@ interface DVRStatus {
 interface DVRPageProps {
   channels: XtreamChannel[];
   onPlayRecording: (recordingPath: string) => void;
+  onPlayCatchup?: (channel: XtreamChannel, program: any) => void;
 }
 
 const formatBytes = (bytes: number): string => {
@@ -387,9 +390,207 @@ const ScheduledTab: React.FC<{ channels: XtreamChannel[] }> = ({ channels }) => 
   );
 };
 
+// ── Catchup (Provider Timeshift Archive) Tab ─────────────────────────────────
+const CatchupTab: React.FC<{
+  channels: XtreamChannel[];
+  onPlayCatchup?: (channel: XtreamChannel, program: any) => void;
+}> = ({ channels, onPlayCatchup }) => {
+  const archiveChannels = useMemo(() => {
+    return channels.filter(c => c.tv_archive === 1);
+  }, [channels]);
+
+  const [selectedChannelId, setSelectedChannelId] = useState<number | null>(() => {
+    return archiveChannels.length > 0 ? archiveChannels[0].stream_id : null;
+  });
+  const [search, setSearch] = useState('');
+  const [programs, setPrograms] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const selectedChannel = useMemo(() => {
+    return archiveChannels.find(c => c.stream_id === selectedChannelId) || null;
+  }, [archiveChannels, selectedChannelId]);
+
+  const filteredChannels = useMemo(() => {
+    if (!search.trim()) return archiveChannels;
+    const q = search.toLowerCase();
+    return archiveChannels.filter(c => c.name.toLowerCase().includes(q));
+  }, [archiveChannels, search]);
+
+  useEffect(() => {
+    if (!selectedChannelId) {
+      setPrograms([]);
+      return;
+    }
+
+    let mounted = true;
+    setLoading(true);
+    setError('');
+
+    xtream.getShortEpg(selectedChannelId, 40)
+      .then(res => {
+        if (!mounted) return;
+        if (res?.epg_listings && Array.isArray(res.epg_listings)) {
+          setPrograms(res.epg_listings);
+        } else {
+          setPrograms([]);
+        }
+      })
+      .catch(err => {
+        if (!mounted) return;
+        setError(err.message || 'Failed to load archive listings');
+      })
+      .finally(() => {
+        if (mounted) setLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [selectedChannelId]);
+
+  if (archiveChannels.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-white/40">
+        <Clock size={48} className="mb-3 opacity-30 text-cyan-400" />
+        <h3 className="text-white font-semibold text-base mb-1">No Provider Catch-up Channels</h3>
+        <p className="text-xs max-w-md text-white/35">
+          Your IPTV provider account does not currently advertise server-side archive (tv_archive: 1) on any active channels.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 flex overflow-hidden">
+      {/* Channels Sidebar */}
+      <div className="w-80 border-r border-white/[0.06] flex flex-col bg-white/[0.01]">
+        <div className="p-3 border-b border-white/[0.06]">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search archive channels..."
+            className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-3 py-2 text-xs text-white placeholder:text-white/30 focus:outline-none focus:border-cyan-500/40"
+          />
+        </div>
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {filteredChannels.map(ch => (
+            <button
+              key={ch.stream_id}
+              onClick={() => setSelectedChannelId(ch.stream_id)}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left text-xs transition-all ${
+                selectedChannelId === ch.stream_id
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                  : 'text-white/70 hover:bg-white/[0.04] border border-transparent'
+              }`}
+            >
+              <span className="truncate font-medium">{ch.name}</span>
+              <span className="text-[10px] bg-white/[0.06] text-white/40 px-1.5 py-0.5 rounded ml-2 shrink-0">
+                {ch.tv_archive_duration || 7}d
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Program Listings */}
+      <div className="flex-1 flex flex-col overflow-hidden p-4">
+        {selectedChannel && (
+          <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/[0.06]">
+            <div>
+              <h3 className="text-white font-bold text-base">{selectedChannel.name}</h3>
+              <p className="text-white/40 text-xs">{selectedChannel.tv_archive_duration || 7} Days Provider Archive Available</p>
+            </div>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-white/40 text-xs gap-2">
+            <RefreshCw size={24} className="animate-spin text-cyan-400" />
+            <span>Loading broadcast archive...</span>
+          </div>
+        ) : error ? (
+          <div className="flex-1 flex items-center justify-center text-red-300 text-xs p-4">
+            <AlertCircle size={16} className="mr-2" />
+            <span>{error}</span>
+          </div>
+        ) : programs.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-white/40 text-xs">
+            <Clock size={36} className="mb-2 opacity-30 text-white" />
+            <span>No past program listings available for this channel</span>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+            {programs.map((item, idx) => {
+              const startTs = item.start_timestamp ? Number(item.start_timestamp) * 1000 : new Date(item.start).getTime();
+              const stopTs = item.stop_timestamp ? Number(item.stop_timestamp) * 1000 : new Date(item.end).getTime();
+              const durationMin = Math.max(5, Math.round((stopTs - startTs) / 60000));
+              const isPast = stopTs < Date.now();
+
+              return (
+                <div
+                  key={item.id || idx}
+                  className="flex items-center justify-between p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.06] hover:border-cyan-500/30 hover:bg-white/[0.04] transition-all"
+                >
+                  <div className="min-w-0 flex-1 mr-4">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-cyan-300 font-mono text-xs font-semibold">
+                        {new Date(startTs).toLocaleDateString([], { month: 'short', day: 'numeric' })} • {new Date(startTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – {new Date(stopTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <span className="text-white/30 text-xs">({durationMin} min)</span>
+                      {isPast && (
+                        <span className="text-[10px] bg-cyan-950 text-cyan-300 border border-cyan-800 px-1.5 py-0.2 rounded font-bold uppercase">
+                          Archive
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-white font-semibold text-sm truncate">{item.title}</p>
+                    {item.description && (
+                      <p className="text-white/40 text-xs line-clamp-1 mt-0.5">{item.description}</p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => {
+                        if (selectedChannel && onPlayCatchup) {
+                          onPlayCatchup(selectedChannel, {
+                            title: item.title,
+                            startTime: new Date(startTs).toISOString(),
+                            stopTime: new Date(stopTs).toISOString(),
+                            description: item.description,
+                          });
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-black font-bold text-xs shadow transition-all"
+                    >
+                      <Play size={14} fill="currentColor" /> Watch Replay
+                    </button>
+                    {selectedChannel && (
+                      <RecordingButton
+                        streamUrl={xtream.getCatchupStreamUrl(selectedChannel.stream_id, new Date(startTs), durationMin)}
+                        channelName={selectedChannel.name}
+                        programTitle={`[Catchup] ${item.title}`}
+                        size="sm"
+                        variant="icon"
+                      />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const DVRPage: React.FC<DVRPageProps> = ({
   channels,
   onPlayRecording,
+  onPlayCatchup,
 }) => {
   const [activeRecordings, setActiveRecordings] = useState<ActiveRecording[]>([]);
   const [library, setLibrary] = useState<RecordingMeta[]>([]);
@@ -397,7 +598,7 @@ export const DVRPage: React.FC<DVRPageProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<'active' | 'library' | 'scheduled'>('active');
+  const [tab, setTab] = useState<'active' | 'library' | 'scheduled' | 'catchup'>('active');
 
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
   const [programTitle, setProgramTitle] = useState('');
@@ -493,7 +694,7 @@ export const DVRPage: React.FC<DVRPageProps> = ({
 
     const streamUrl = selectedChannel.direct_source?.trim()
       ? selectedChannel.direct_source
-      : xtream.getLiveStreamUrl(selectedChannel.stream_id, 'm3u8');
+      : xtream.getLiveStreamUrl(selectedChannel.stream_id, 'ts');
 
     setIsStarting(true);
     setError('');
@@ -559,6 +760,26 @@ export const DVRPage: React.FC<DVRPageProps> = ({
     await refreshStatus();
   }, [outputDirInput, refreshStatus]);
 
+  const pickOutputDir = useCallback(async () => {
+    try {
+      const result = await window.electronAPI?.invoke?.('dialog:show-open', {
+        properties: ['openDirectory', 'createDirectory'],
+        title: 'Select DVR Recording Folder',
+      });
+      if (result && !result.canceled && Array.isArray(result.filePaths) && result.filePaths.length > 0) {
+        const selectedDir = result.filePaths[0];
+        setOutputDirInput(selectedDir);
+        const res = await window.electronAPI?.invoke?.('dvr:set-output-dir', selectedDir);
+        if (res?.success) {
+          setStatus(prev => prev ? { ...prev, outputDir: res.outputDir || selectedDir } : prev);
+          await refreshStatus();
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to open directory picker');
+    }
+  }, [refreshStatus]);
+
   const openRecordingLocation = useCallback(async (outputPath: string) => {
     const folderPath = outputPath.replace(/[\\/][^\\/]+$/, '');
     await window.electronAPI?.invoke?.('shell:open-path', folderPath || outputPath);
@@ -606,6 +827,15 @@ export const DVRPage: React.FC<DVRPageProps> = ({
         >
           Scheduled
         </button>
+        <button
+          onClick={() => setTab('catchup')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            tab === 'catchup' ? 'bg-cyan-500/20 text-cyan-300' : 'text-white/50 hover:text-white'
+          }`}
+        >
+          <History size={13} />
+          Provider Catch-up
+        </button>
 
         <button
           onClick={() => void refreshAll()}
@@ -636,6 +866,13 @@ export const DVRPage: React.FC<DVRPageProps> = ({
               className="min-w-0 flex-1 bg-white/[0.04] border border-white/[0.1] rounded-lg px-3 py-2 text-xs text-white placeholder:text-white/25"
             />
             <button
+              onClick={() => void pickOutputDir()}
+              className="px-3 py-2 rounded-lg bg-white/[0.08] border border-white/[0.12] text-white/80 text-xs font-semibold hover:bg-white/[0.15] hover:text-white transition-colors"
+              title="Browse and select folder"
+            >
+              Browse...
+            </button>
+            <button
               onClick={() => void applyOutputDir()}
               className="px-3 py-2 rounded-lg bg-cyan-500/15 border border-cyan-500/25 text-cyan-200 text-xs font-semibold hover:bg-cyan-500/25 transition-colors"
             >
@@ -644,7 +881,7 @@ export const DVRPage: React.FC<DVRPageProps> = ({
             <button
               onClick={() => void openOutputDir()}
               className="p-2 rounded-lg text-white/55 hover:text-white hover:bg-white/[0.06] transition-colors"
-              title="Open recording folder"
+              title="Open recording folder in Explorer"
             >
               <FolderOpen size={14} />
             </button>
@@ -894,6 +1131,10 @@ export const DVRPage: React.FC<DVRPageProps> = ({
 
       {tab === 'scheduled' && (
         <ScheduledTab channels={channels} />
+      )}
+
+      {tab === 'catchup' && (
+        <CatchupTab channels={channels} onPlayCatchup={onPlayCatchup} />
       )}
     </div>
   );

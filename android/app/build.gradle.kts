@@ -17,12 +17,12 @@ android {
         applicationId = "com.dylandos.iptv.ultimate"
         minSdk = 21  // Android 5.0 - Wide device compatibility
         targetSdk = 35
-        versionCode = 86
-        versionName = "5.0.0"
+        versionCode = 91
+        versionName = "5.2.0"
 
-        // v5.0 release metadata (see RELEASE_PLAYBOOK.md):
-        //   versionCode 86 / 5.0.0 — adaptive live buffer, RTSP/HTTP hardening,
-        //   EPG time fix (hour-snapping removed), dynamic timeshift ring.
+        // v5.1 release metadata (see RELEASE_PLAYBOOK.md):
+        //   versionCode 90 / 5.1.0 — Smart EPG show-aware DVR naming, NFO sidecars,
+        //   decoupled Timeshift/DVR storage, HLS.js CEA-608/708 captions, and Fire TV remote mappings.
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -36,7 +36,7 @@ android {
         buildConfigField(
             "String",
             "GIST_UPDATE_URL",
-            "\"https://api.github.com/gists/6056e65b41641393abf585cecbd92d07\""
+            "\"https://api.github.com/gists/c3eda014bd60ef939da246f1896066e4\""
         )
         // B3: crash reporting — blank DSN (default) keeps Sentry fully disabled (no network,
         // no SDK init). Set SENTRY_DSN in ~/.gradle/gradle.properties or CI secrets to enable.
@@ -179,7 +179,11 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
 
     // ── Jetpack Compose ──────────────────────────────────────────────
-    val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
+    // Compose UI 1.11 (from the 2026 BOM) raises its minSdk to 23.  Fire OS 5
+    // devices are still an explicit supported target of this app (minSdk 21), so
+    // keep the Firestick-compatible 1.7 Compose line until the product minSdk is
+    // deliberately raised.
+    val composeBom = platform("androidx.compose:compose-bom:2025.02.00")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")

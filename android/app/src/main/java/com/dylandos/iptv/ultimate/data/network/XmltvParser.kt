@@ -48,8 +48,9 @@ object XmltvParser {
      * Parse a single XMLTV start/stop attribute into UTC epoch millis.
      *
      * @param sourceTimeZone Zone used only when the timestamp has no offset suffix.
+     * @param timeOffsetHours Manual offset in hours to shift the parsed time.
      */
-    fun parseTime(raw: String, sourceTimeZone: TimeZone = TimeZone.getTimeZone("UTC")): Long {
+    fun parseTime(raw: String, sourceTimeZone: TimeZone = TimeZone.getTimeZone("UTC"), timeOffsetHours: Int = 0): Long {
         if (raw.isBlank()) return 0L
 
         var cleaned = raw.trim()
@@ -70,7 +71,8 @@ object XmltvParser {
         }
 
         return try {
-            dateFormat.get()?.parse(cleaned)?.time ?: 0L
+            val parsedMs = dateFormat.get()?.parse(cleaned)?.time ?: 0L
+            if (parsedMs > 0L) parsedMs + (timeOffsetHours * 3600_000L) else 0L
         } catch (e: Exception) {
             Timber.w("XMLTV: could not parse time '$raw' (normalized: '$cleaned')")
             0L
@@ -94,12 +96,14 @@ object XmltvParser {
      * Programmes are emitted once per canonical channel id; aliases are returned separately.
      *
      * @param sourceTimeZone Zone for offset-less timestamps (provider TZ or feed region).
+     * @param timeOffsetHours Manual offset in hours to shift all timestamps.
      */
     fun parse(
         stream: InputStream,
         acceptedChannelIds: Set<String> = emptySet(),
-        maxPrograms: Int = Int.MAX_VALUE,
-        sourceTimeZone: TimeZone = TimeZone.getTimeZone("UTC")
+        sourceTimeZone: TimeZone = TimeZone.getTimeZone("UTC"),
+        timeOffsetHours: Int = 0,
+        maxPrograms: Int = Int.MAX_VALUE
     ): ParseResult {
         val programs = mutableListOf<EpgProgramEntity>()
         val channelAliases = mutableMapOf<String, Set<String>>()
@@ -160,8 +164,8 @@ object XmltvParser {
                     val startRaw  = parser.getAttributeValue(null, "start")   ?: ""
                     val stopRaw   = parser.getAttributeValue(null, "stop")    ?: ""
                     val channelId = parser.getAttributeValue(null, "channel") ?: ""
-                    val startMs   = parseTime(startRaw, sourceTimeZone)
-                    val stopMs    = parseTime(stopRaw, sourceTimeZone)
+                    val startMs   = parseTime(startRaw, sourceTimeZone, timeOffsetHours)
+                    val stopMs    = parseTime(stopRaw, sourceTimeZone, timeOffsetHours)
                     val channelAccepted = acceptedKeys.isEmpty() ||
                         channelKeys(channelId).any { it in acceptedKeys }
 

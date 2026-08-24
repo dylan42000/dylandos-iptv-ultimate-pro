@@ -1,6 +1,6 @@
 {
   "name": "dylandos-iptv-ultimate",
-  "version": "4.8.1",
+  "version": "5.2.0",
   "description": "DYLANDOS IPTV ULTIMATE — World-Class IPTV Player for Windows",
   "main": "electron/main.cjs",
   "author": "Dylandos",
@@ -10,12 +10,15 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "vite build && electron-builder",
-    "electron:build:safe": "(taskkill /F /IM \"DYLANDOS IPTV ULTIMATE.exe\" /T >NUL 2>&1 || ver >NUL) && (taskkill /F /IM electron.exe /T >NUL 2>&1 || ver >NUL) && vite build && electron-builder",
+    "setup-vendor": "node scripts/setup-vendor-binaries.cjs",
+    "postinstall": "node scripts/setup-vendor-binaries.cjs",
+    "electron:dev": "node scripts/setup-vendor-binaries.cjs && concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:build": "node scripts/setup-vendor-binaries.cjs && vite build && electron-builder",
+    "electron:build:safe": "(taskkill /F /IM \"DYLANDOS IPTV ULTIMATE.exe\" /T >NUL 2>&1 || ver >NUL) && (taskkill /F /IM electron.exe /T >NUL 2>&1 || ver >NUL) && node scripts/setup-vendor-binaries.cjs && vite build && electron-builder",
     "electron:start": "electron ."
   },
   "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@types/react-window": "^1.8.8",
     "electron-updater": "^6.3.9",
     "hls.js": "^1.5.15",

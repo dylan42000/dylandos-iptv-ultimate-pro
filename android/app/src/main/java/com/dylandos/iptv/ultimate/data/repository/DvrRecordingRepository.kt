@@ -298,6 +298,7 @@ class DvrRecordingRepository @Inject constructor(
         channelName  = channelName,
         channelId    = channelId,
         streamUrl    = streamUrl,
+        programTitle = programTitle,
         filePath     = filePath,
         startTimeMs  = startTimeMs,
         stopTimeMs   = if (endTimeMs > 0L) endTimeMs else null,
@@ -314,7 +315,8 @@ class DvrRecordingRepository @Inject constructor(
         startTimeMs  = startTimeMs,
         endTimeMs    = stopTimeMs ?: 0L,
         fileSizeBytes= fileSizeBytes,
-        status       = statusStr
+        status       = statusStr,
+        programTitle = programTitle
     )
 
     private fun ScheduledRecordingEntity.toScheduledRecording() = ScheduledRecording(

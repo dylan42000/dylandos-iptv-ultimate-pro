@@ -66,7 +66,7 @@ import com.dylandos.iptv.ultimate.data.db.entity.WatchHistoryEntity
         CachedMovieEntity::class,
         CachedSeriesEntity::class
     ],
-    version = 16,
+    version = 17,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -330,6 +330,13 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("DELETE FROM epg_programs")
                 db.execSQL("DELETE FROM epg_channel_aliases")
+            }
+        }
+
+        /** v16 → v17: add programTitle column to dvr_recordings for show-aware naming. */
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE dvr_recordings ADD COLUMN programTitle TEXT NOT NULL DEFAULT ''")
             }
         }
     }

@@ -17,9 +17,13 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.text.style.TextOverflow
+import com.dylandos.iptv.ultimate.ui.navigation.Screen
+import com.dylandos.iptv.ultimate.ui.navigation.navigateSafe
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -59,6 +63,7 @@ import com.dylandos.iptv.ultimate.data.util.StorageDetector
 import com.dylandos.iptv.ultimate.player.MpvEngineFactory
 import com.dylandos.iptv.ultimate.player.engine.LiveBufferController
 import com.dylandos.iptv.ultimate.player.engine.LiveBufferEvent
+import com.dylandos.iptv.ultimate.player.timeshift.TimeshiftRingMath
 import com.dylandos.iptv.ultimate.player.MpvEvent
 import com.dylandos.iptv.ultimate.player.MpvSurface
 import com.dylandos.iptv.ultimate.player.subtitle.SubtitleLanguage
@@ -215,8 +220,15 @@ private fun resolveTimeshiftDirectory(ctx: android.content.Context, persistedPat
         }.getOrDefault(false)
         if (!writable) return null
         val freeBytes = maxOf(dir.usableSpace, dir.freeSpace)
-        if (freeBytes in 1 until 256L * 1024L * 1024L) {
-            Timber.w("Timeshift disabled: low free space on ${dir.absolutePath}")
+        // The cache ring itself has a 512 MiB floor.  Admitting a 256 MiB USB
+        // volume made SimpleCache fill the drive and report a misleading playback
+        // error with a Retry button instead of falling back to normal Live TV.
+        val requiredFreeBytes = TimeshiftRingMath.MIN_RING_BYTES + 128L * 1024L * 1024L
+        if (freeBytes in 1 until requiredFreeBytes) {
+            Timber.w(
+                "Timeshift disabled: only ${freeBytes / (1024 * 1024)}MB free on " +
+                    "${dir.absolutePath}; requires ${requiredFreeBytes / (1024 * 1024)}MB"
+            )
             return null
         }
         if (freeBytes <= 0L) {
@@ -482,7 +494,7 @@ fun PlayerScreen(
     // - VOD/Series: MPV → LibVLC → Media3
     // - Live/DVR: LibVLC → Media3 (USB timeshift live = Media3 only)
     val isVodOrSeries = streamType == "vod" || streamType == "series"
-    val preferMpvVod = isVodOrSeries
+    val preferMpvVod = false // Disabled MPV in favor of LibVLC per user request
     val preferMedia3Live = settingsState.timeshiftEnabled && isLive
     val preferMedia3Playback = preferMedia3Live
     // ── v5.0 Adaptive Buffer Controller ─────────────────────────────────────────
@@ -534,6 +546,7 @@ fun PlayerScreen(
     var audioTracks    by remember { mutableStateOf<List<MediaPlayer.TrackDescription>>(emptyList()) }
     // Full subtitle picker sheet (LibVlcSubtitleManager-backed, replaces inline picker on long-press CC)
     var showFullSubtitleSheet by remember { mutableStateOf(false) }
+    var showCatchupSheet by remember { mutableStateOf(false) }
     // S-017: MENU key cycles VLC aspect ratio; null = auto (default LibVLC), then 16:9, 4:3, 1:1, fill
     val aspectRatioOptions = remember { listOf(null, "16:9", "4:3", "1:1", "fill") }
     var aspectIndex by remember { mutableIntStateOf(0) }
@@ -635,7 +648,18 @@ fun PlayerScreen(
     fun ensureExoPlayer(): ExoPlayer {
         val existing = exoPlayer
         if (existing != null) return existing
-        val created = exoHost.getOrCreate(liveTimeshiftEnabled, liveTimeshiftPath)
+        val ringMaxBytes = liveTimeshiftPath?.let { path ->
+            val cacheDir = File(path, "media3_cache")
+            TimeshiftRingMath.computeRingMaxBytes(
+                freeBytes = maxOf(cacheDir.usableSpace, cacheDir.freeSpace),
+                windowMinutes = settingsState.timeshiftWindowMinutes
+            )
+        }
+        val created = exoHost.getOrCreate(
+            timeshiftEnabled = liveTimeshiftEnabled,
+            timeshiftPath = liveTimeshiftPath,
+            ringMaxBytes = ringMaxBytes
+        )
         exoPlayer = created
         return created
     }
@@ -840,6 +864,17 @@ fun PlayerScreen(
             }
             return
         }
+        if (encodedId in 999_001..999_004) {
+            ep.trackSelectionParameters = ep.trackSelectionParameters
+                .buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .setPreferredTextLanguage("en")
+                .setSelectUndeterminedTextLanguage(true)
+                .build()
+            media3SubtitlesEnabled = true
+            selectedMedia3SubtitleId = encodedId
+            return
+        }
         val groupIndex = encodedId / 1_000
         val trackIndex = encodedId % 1_000
         val group = ep.currentTracks.groups.getOrNull(groupIndex) ?: return
@@ -904,7 +939,8 @@ fun PlayerScreen(
             val newRecordingId = dvrViewModel.startRecording(
                 channelName = state.streamTitle.ifEmpty { "Channel $streamId" },
                 channelId = streamId.toIntOrNull() ?: state.currentLiveStreamId ?: 0,
-                streamUrl = state.streamUrl
+                streamUrl = state.streamUrl,
+                programTitle = state.liveEpgTitle?.takeIf { it.isNotBlank() }
             )
             if (newRecordingId.isNotBlank()) {
                 activeRecordingId = newRecordingId
@@ -1048,7 +1084,12 @@ fun PlayerScreen(
                         ).distinct().joinToString(" · ").ifBlank { "$fallback ${trackIndex + 1}" }
                         when (group.type) {
                             C.TRACK_TYPE_TEXT -> {
-                                subtitles += encodedId to label
+                                val isCc = format.label?.contains("CC", ignoreCase = true) == true ||
+                                    format.sampleMimeType?.contains("cea", ignoreCase = true) == true ||
+                                    format.sampleMimeType?.contains("closedcaption", ignoreCase = true) == true ||
+                                    isLive
+                                val finalLabel = if (isLive && !label.contains("CC", ignoreCase = true)) "CC: $label" else label
+                                subtitles += encodedId to finalLabel
                                 if (group.isTrackSelected(trackIndex)) selectedSubtitle = encodedId
                             }
                             C.TRACK_TYPE_AUDIO -> {
@@ -1057,6 +1098,10 @@ fun PlayerScreen(
                             }
                         }
                     }
+                }
+                if (isLive && subtitles.isEmpty()) {
+                    subtitles += 999_001 to "CC 1 (Auto Detect / CEA-608)"
+                    subtitles += 999_002 to "CC 2 (Secondary)"
                 }
                 media3SubtitleTracks = subtitles
                 media3AudioTracks = audio
@@ -1860,11 +1905,18 @@ fun PlayerScreen(
         useExoFallback,
         enhancedSubtitleTracks,
         media3SubtitleTracks,
-        mpvSubtitleTracks
+        mpvSubtitleTracks,
+        isLive
     ) {
         when {
             useMpvPrimary -> mpvSubtitleTracks
-            useExoFallback -> listOf(-1 to "Disable subtitles") + media3SubtitleTracks
+            useExoFallback -> {
+                val disableLabel = if (isLive) "Disable Closed Captions" else "Disable subtitles"
+                val tracks = if (media3SubtitleTracks.isNotEmpty()) media3SubtitleTracks
+                    else if (isLive) listOf(999_001 to "CC 1 (Auto Detect)", 999_002 to "CC 2 (Secondary)")
+                    else emptyList()
+                listOf(-1 to disableLabel) + tracks
+            }
             else -> enhancedSubtitleTracks
         }
     }
@@ -1989,7 +2041,14 @@ fun PlayerScreen(
                                 controlIndex = (controlIndex - 1 + controlCount) % controlCount
                                 true
                             }
-                            else -> false
+                            else -> {
+                                if (hasPlayerControlsEngine) {
+                                    if (isLive) rewindLiveOrCatchup() else seekActivePlayer(-configuredSkipMs)
+                                    showControls = true
+                                    controlsInteractionTick++
+                                    true
+                                } else false
+                            }
                         }
                     }
                     Key.DirectionRight -> {
@@ -2004,7 +2063,14 @@ fun PlayerScreen(
                                 controlIndex = (controlIndex + 1) % controlCount
                                 true
                             }
-                            else -> false
+                            else -> {
+                                if (hasPlayerControlsEngine) {
+                                    if (isLive) fastForwardLiveOrCatchup() else seekActivePlayer(configuredSkipMs)
+                                    showControls = true
+                                    controlsInteractionTick++
+                                    true
+                                } else false
+                            }
                         }
                     }
                     Key.DirectionCenter, Key.Enter -> {
@@ -2488,8 +2554,10 @@ fun PlayerScreen(
                                                     .padding(horizontal = 12.dp, vertical = 7.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                val tFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
-                                                val tStr = runCatching { tFormat.format(java.util.Date(prog.startTimestamp * 1000L)) }.getOrDefault("")
+                                                val tStr = com.dylandos.iptv.ultimate.ui.util.TimeFormatter.formatShortTime(
+                                                    prog.startTimestamp * 1000L,
+                                                    settingsState.epgTimeFormat
+                                                )
                                                 Text(
                                                     text = tStr,
                                                     color = Accent,
@@ -2616,7 +2684,9 @@ fun PlayerScreen(
                                 controlsInteractionTick++
                                 when (idx) {
                                     0 -> {
-                                        if (isLive) {
+                                        if (isLive && !uiState.isCatchupPlayback && (uiState.canRestartCurrentProgram || uiState.catchupPrograms.isNotEmpty())) {
+                                            showCatchupSheet = true
+                                        } else if (isLive) {
                                             rewindLiveOrCatchup()
                                         } else {
                                             seekActivePlayer(-configuredSkipMs)
@@ -2783,6 +2853,24 @@ fun PlayerScreen(
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
+                        if (settingsState.showClockInPlayer) {
+                            Spacer(modifier = Modifier.width(10.dp))
+                            val playerClock = com.dylandos.iptv.ultimate.ui.util.rememberLiveClock(settingsState.epgTimeFormat)
+                            Surface(
+                                color = BgSurface2,
+                                shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(1.dp, BorderDefault)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(Icons.Default.Schedule, contentDescription = null, tint = Accent, modifier = Modifier.size(12.dp))
+                                    Text(playerClock, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
                         if (hasPlayerControlsEngine) {
                             Spacer(modifier = Modifier.weight(1f))
                             PlaybackTimeReadout(
@@ -2810,6 +2898,102 @@ fun PlayerScreen(
                         subtitleManager = subtitleManager,
                         isLiveTv = isLive,
                         onDismiss = { showFullSubtitleSheet = false }
+                    )
+                }
+
+                if (showCatchupSheet) {
+                    AlertDialog(
+                        onDismissRequest = { showCatchupSheet = false },
+                        title = {
+                            Text(
+                                text = "Catch-Up / Timeshift (${uiState.streamTitle})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                        },
+                        text = {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 350.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (uiState.canRestartCurrentProgram) {
+                                    item {
+                                        Surface(
+                                            onClick = {
+                                                showCatchupSheet = false
+                                                viewModel.restartCurrentProgram()
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = AccentSurface,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Icon(Icons.Default.Replay, null, tint = Accent, modifier = Modifier.size(18.dp))
+                                                Column {
+                                                    Text("Restart Current Program", color = Accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                    uiState.liveEpgTitle?.let {
+                                                        Text(it, color = TextPrimary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if (uiState.catchupPrograms.isEmpty() && !uiState.canRestartCurrentProgram) {
+                                    item {
+                                        Text(
+                                            "No past program recordings found for this channel.",
+                                            color = TextSecondary,
+                                            fontSize = 12.sp,
+                                            modifier = Modifier.padding(8.dp)
+                                        )
+                                    }
+                                } else {
+                                    items(uiState.catchupPrograms) { prog ->
+                                        val startFmt = java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.getDefault()).format(java.util.Date(prog.startTimestamp * 1000L))
+                                        val stopFmt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date(prog.stopTimestamp * 1000L))
+                                        val durMin = ((prog.stopTimestamp - prog.startTimestamp) / 60L).coerceAtLeast(1L)
+                                        Surface(
+                                            onClick = {
+                                                showCatchupSheet = false
+                                                val token = viewModel.buildTimeShiftToken(
+                                                    streamId = streamId.toIntOrNull() ?: uiState.currentLiveStreamId ?: 0,
+                                                    startMs = prog.startTimestamp * 1000L,
+                                                    endMs = prog.stopTimestamp * 1000L
+                                                )
+                                                viewModel.setPendingPlaybackTitle("${uiState.streamTitle} - ${prog.title} ($startFmt)")
+                                                navController.navigateSafe(Screen.Player.createRoute("timeshift", token, "ts"))
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = BgSurface2,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(prog.title.ifBlank { "Program" }, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                                    Text("$startFmt - $stopFmt (${durMin}m)", color = TextTertiary, fontSize = 11.sp)
+                                                }
+                                                Icon(Icons.Default.PlayArrow, "Play", tint = Accent, modifier = Modifier.size(20.dp))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showCatchupSheet = false }) { Text("Close") }
+                        },
+                        containerColor = BgSurface,
+                        titleContentColor = TextPrimary
                     )
                 }
 
@@ -3046,18 +3230,17 @@ private fun PlayerControls(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 0: Rewind
+                // 0: Rewind / Restart / Catch-up
                 PlayerControlBtn(
-                    icon = if (isLive && !isCatchupPlayback) Icons.Default.Replay else Icons.Default.FastRewind,
+                    icon = if (isLive && !isCatchupPlayback) Icons.Default.History else Icons.Default.FastRewind,
                     label = when {
-                        isLive && !isCatchupPlayback && canRestartCurrentProgram -> "Restart"
-                        isLive && !isCatchupPlayback -> "No Catch-up"
+                        isLive && !isCatchupPlayback -> "Catch-up"
                         else -> "Rewind"
                     },
                     index = 0,
                     focusedIndex = focusedIndex,
                     onFocused = { onFocusChanged(0) },
-                    isActive = isLive && !isCatchupPlayback && canRestartCurrentProgram,
+                    isActive = isLive && !isCatchupPlayback,
                     onClick = { onControlAction(0) }
                 )
 
@@ -3089,7 +3272,6 @@ private fun PlayerControls(
                 PlayerControlBtn(
                     icon = Icons.Default.ClosedCaption,
                     label = when {
-                        useExoFallback && media3TextTrackCount == 0 -> if (isLive) "CC Auto" else "Sub Auto"
                         useExoFallback && media3SubtitlesEnabled -> if (isLive) "CC On" else "Sub On"
                         useExoFallback -> if (isLive) "CC Off" else "Sub Off"
                         isLive -> "CC"
@@ -3098,7 +3280,7 @@ private fun PlayerControls(
                     index = 3,
                     focusedIndex = focusedIndex,
                     onFocused = { onFocusChanged(3) },
-                    isActive = useExoFallback && media3SubtitlesEnabled && media3TextTrackCount > 0,
+                    isActive = if (useExoFallback) media3SubtitlesEnabled else (subtitleTracks.isNotEmpty()),
                     onClick = { onControlAction(3) }
                 )
 
@@ -3619,4 +3801,3 @@ private fun SubDelayBtn(label: String, onClick: () -> Unit) {
         )
     }
 }
-

@@ -130,15 +130,26 @@ fun LiveTvScreen(
     // Use cache-first load to avoid forced rebuffer/network storms when revisiting Live TV.
     LaunchedEffect(Unit) { viewModel.loadChannels(forceRefresh = false) }
 
+    var shouldRestoreFocusOnResume by remember { mutableStateOf(false) }
+
     // Restore focus to the currently playing channel when returning from Player.
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.syncFocusedChannelFromPlayback()
+                shouldRestoreFocusOnResume = true
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(shouldRestoreFocusOnResume) {
+        if (shouldRestoreFocusOnResume) {
+            shouldRestoreFocusOnResume = false
+            delay(100)
+            runCatching { channelListFocusRequester.requestFocus() }
+        }
     }
 
     LaunchedEffect(channelListState) {
@@ -215,7 +226,34 @@ fun LiveTvScreen(
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = BgSurface,
                     titleContentColor = TextPrimary
-                )
+                ),
+                actions = {
+                    val liveClock = com.dylandos.iptv.ultimate.ui.util.rememberLiveClock()
+                    Surface(
+                        color = BgSurface2,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.padding(end = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Schedule,
+                                contentDescription = null,
+                                tint = Accent,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = liveClock,
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                }
             )
 
             LiveCommandStrip(
@@ -1135,6 +1173,4 @@ private fun ChannelRow(
 }
 
 private fun formatEpgTime(epochSeconds: Long): String =
-    SimpleDateFormat("h:mm a", Locale.getDefault()).apply {
-        timeZone = java.util.TimeZone.getDefault()
-    }.format(Date(epochSeconds * 1000L))
+    com.dylandos.iptv.ultimate.ui.util.TimeFormatter.formatShortTime(epochSeconds * 1000L)

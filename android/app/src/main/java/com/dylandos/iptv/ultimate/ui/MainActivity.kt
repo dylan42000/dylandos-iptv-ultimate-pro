@@ -1,10 +1,12 @@
 package com.dylandos.iptv.ultimate.ui
 
 import android.app.PictureInPictureParams
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -16,10 +18,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.currentBackStackEntryAsState
 import com.dylandos.iptv.ultimate.ui.screens.settings.dataStore
 import com.dylandos.iptv.ultimate.ui.navigation.DylandosNavGraph
+import com.dylandos.iptv.ultimate.ui.navigation.Screen
 import com.dylandos.iptv.ultimate.ui.player.PipController
 import com.dylandos.iptv.ultimate.ui.screens.settings.SettingsViewModel
+import com.dylandos.iptv.ultimate.ui.screens.dvr.DvrViewModel
 import com.dylandos.iptv.ultimate.ui.theme.AppTheme
 import com.dylandos.iptv.ultimate.ui.theme.DylandosTheme
 import com.dylandos.iptv.ultimate.ui.theme.appThemeFromName
@@ -41,8 +46,15 @@ import timber.log.Timber
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        const val ACTION_OPEN_DVR = "com.dylandos.iptv.ultimate.action.OPEN_DVR"
+    }
+
+    private var openDvrRequest by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        openDvrRequest = intent?.action == ACTION_OPEN_DVR
 
         Timber.d("MainActivity created")
 
@@ -68,10 +80,19 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    DylandosApp()
+                    DylandosApp(
+                        openDvrRequest = openDvrRequest,
+                        onDvrRequestConsumed = { openDvrRequest = false }
+                    )
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == ACTION_OPEN_DVR) openDvrRequest = true
     }
 
     /**
@@ -94,11 +115,34 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun DylandosApp() {
+fun DylandosApp(
+    openDvrRequest: Boolean = false,
+    onDvrRequestConsumed: () -> Unit = {}
+) {
     val navController = rememberNavController()
     val updateViewModel: UpdateViewModel = hiltViewModel()
+    val dvrViewModel: DvrViewModel = hiltViewModel()
     val context = androidx.compose.ui.platform.LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val activity = context as? android.app.Activity
+    val dvrState by dvrViewModel.uiState.collectAsState()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val onMainMenu = backStackEntry?.destination?.route == "home"
+    var showExitForRecordingDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(openDvrRequest) {
+        if (openDvrRequest) {
+            navController.navigate(Screen.Dvr.route) { launchSingleTop = true }
+            onDvrRequestConsumed()
+        }
+    }
+
+    // Fire TV's Back button should never make a recording look like it will be lost.
+    // Moving the task to the background leaves the foreground RecordingService running,
+    // with the small ongoing DVR notification as the low-resource control surface.
+    BackHandler(enabled = onMainMenu) {
+        showExitForRecordingDialog = true
+    }
 
     // Fire the update check once when the app starts
     LaunchedEffect(Unit) {
@@ -122,6 +166,41 @@ fun DylandosApp() {
     var showWhatsNew by remember { mutableStateOf(shouldShowWhatsNew(context)) }
 
     DylandosNavGraph(navController = navController)
+
+    if (showExitForRecordingDialog) {
+        val activeCount = dvrState.activeRecordings.size
+        val scheduledCount = dvrState.scheduledRecordings.size
+        AlertDialog(
+            onDismissRequest = { showExitForRecordingDialog = false },
+            title = { Text(if (activeCount > 0) "DVR is recording" else "Exit DYLANDOS IPTV?") },
+            text = {
+                Text(
+                    when {
+                        activeCount > 0 -> "$activeCount recording${if (activeCount == 1) " is" else "s are"} active. Minimize the app to keep the low-resource DVR service running. You can return from the ongoing DVR notification."
+                        scheduledCount > 0 -> "$scheduledCount future recording${if (scheduledCount == 1) " is" else "s are"} scheduled. They use Android's scheduler and do not require the full app screen to remain open."
+                        else -> "Close the app, or cancel to keep browsing."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExitForRecordingDialog = false
+                    activity?.moveTaskToBack(true)
+                }) {
+                    Text(if (activeCount > 0) "Minimize & keep DVR" else "Minimize")
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { showExitForRecordingDialog = false }) { Text("Cancel") }
+                    TextButton(onClick = {
+                        showExitForRecordingDialog = false
+                        activity?.finishAndRemoveTask()
+                    }) { Text("Close UI") }
+                }
+            }
+        )
+    }
 
     // What's New overlay — shown before update dialog so user sees changelog first
     if (showWhatsNew) {

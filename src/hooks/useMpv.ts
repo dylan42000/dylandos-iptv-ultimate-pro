@@ -42,6 +42,9 @@ export interface MpvPlayerState {
   reconnectDelayMs: number;
   streamType: 'live' | 'vod' | null;
   isAvailable: boolean;
+  cacheDuration: number;
+  cacheState: any;
+  timeshiftOffset: number;
 }
 
 const INITIAL_STATE: MpvPlayerState = {
@@ -69,6 +72,9 @@ const INITIAL_STATE: MpvPlayerState = {
   reconnectDelayMs: 0,
   streamType: null,
   isAvailable: true,
+  cacheDuration: 0,
+  cacheState: null,
+  timeshiftOffset: 0,
 };
 
 // ─── Helper: parse track-list from MPV ───────────────────────────────────────
@@ -179,7 +185,11 @@ export function useMpv() {
         }));
       },
 
-      'mpv:poll': ({ position, duration, pause, volume, mute }: any) => {
+      'mpv:poll': ({ position, duration, pause, volume, mute, cacheDuration, cacheState }: any) => {
+        let timeshiftOffset = 0;
+        if (cacheState && typeof cacheState['cache-end'] === 'number') {
+          timeshiftOffset = Math.max(0, cacheState['cache-end']);
+        }
         setState(prev => ({
           ...prev,
           position,
@@ -194,6 +204,9 @@ export function useMpv() {
           error: prev.isLoading && !pause ? null : prev.error,
           volume: typeof volume === 'number' ? volume : prev.volume,
           muted: mute ?? prev.muted,
+          cacheDuration: typeof cacheDuration === 'number' ? cacheDuration : prev.cacheDuration,
+          cacheState: cacheState ?? prev.cacheState,
+          timeshiftOffset,
         }));
       },
 
@@ -284,6 +297,7 @@ export function useMpv() {
         url,
         settings: {
           liveBufferPreset: settings.liveBufferPreset,
+          liveTimeshiftBufferSize: settings.liveTimeshiftBufferSize || 'large',
           hardwareDecode: settings.hardwareDecode,
           liveTimeshiftEnabled: settings.liveTimeshiftEnabled !== false,
           audioOffsetMs: settings.audioOffsetMs,
@@ -354,6 +368,9 @@ export function useMpv() {
   const seekRelative = useCallback((delta: number) =>
     window.electronAPI?.invoke('mpv:seek-relative', { delta }), []);
 
+  const jumpToLive = useCallback(() =>
+    window.electronAPI?.invoke('mpv:jump-to-live'), []);
+
   const setVolume = useCallback((level: number) =>
     window.electronAPI?.invoke('mpv:set-volume', { level }), []);
 
@@ -386,6 +403,7 @@ export function useMpv() {
       stop,
       seek,
       seekRelative,
+      jumpToLive,
       setVolume,
       setMute,
       setAudioTrack,

@@ -50,7 +50,8 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_12_13,
                 AppDatabase.MIGRATION_13_14,
                 AppDatabase.MIGRATION_14_15,
-                AppDatabase.MIGRATION_15_16
+                AppDatabase.MIGRATION_15_16,
+                AppDatabase.MIGRATION_16_17
             )
             // Ancient installs (schema v1–v4) have no safe migration chain into the
             // current EPG/DVR schema. Destructive fallback is intentional last resort

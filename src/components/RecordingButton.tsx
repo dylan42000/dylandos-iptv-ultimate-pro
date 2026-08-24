@@ -1,10 +1,11 @@
 // ─── Quick Recording Button Component ─────────────────────────────────────
 
-import React, { useState, useCallback } from 'react';
-import { Circle, CheckCircle2, AlertCircle, X, Clock } from 'lucide-react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { Circle, Square, CheckCircle2, AlertCircle, X, Clock, HardDrive, Play, Settings } from 'lucide-react';
 import { XtreamChannel } from '../types/xtream';
 import { EPGProgram } from '../types/epg';
 import { xtreamApi as xtream } from '../services/xtreamApi';
+import { useToast } from './ToastProvider';
 
 interface VodSource {
   streamUrl: string;
@@ -13,6 +14,10 @@ interface VodSource {
 }
 
 interface RecordingButtonProps {
+  /** Direct stream URL (highest priority) */
+  streamUrl?: string;
+  channelName?: string;
+  programTitle?: string;
   /** Live channel mode */
   channel?: XtreamChannel;
   program?: EPGProgram | null;
@@ -23,7 +28,29 @@ interface RecordingButtonProps {
   className?: string;
 }
 
+const formatBytes = (bytes: number): string => {
+  if (!isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx++;
+  }
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[idx]}`;
+};
+
+const formatSeconds = (sec: number): string => {
+  const s = Math.max(0, Math.floor(sec));
+  const m = Math.floor(s / 60);
+  const remSec = s % 60;
+  return `${m}:${String(remSec).padStart(2, '0')}`;
+};
+
 export const RecordingButton: React.FC<RecordingButtonProps> = ({
+  streamUrl: directStreamUrl,
+  channelName: directChannelName,
+  programTitle: directProgramTitle,
   channel,
   program,
   vodSource,
@@ -31,6 +58,7 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
   variant = 'icon',
   className = '',
 }) => {
+  const { success, error: toastError, info } = useToast();
   const [isRecording, setIsRecording] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
   const [duration, setDuration] = useState(60);
@@ -38,6 +66,89 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState('');
   const [recordingId, setRecordingId] = useState<string | null>(null);
+  const [bytesWritten, setBytesWritten] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  const recordingIdRef = useRef<string | null>(null);
+  recordingIdRef.current = recordingId;
+
+  const currentStreamUrl = directStreamUrl
+    ?? vodSource?.streamUrl
+    ?? (channel?.direct_source?.trim()
+      ? channel.direct_source
+      : channel?.stream_id
+        ? xtream.getLiveStreamUrl(channel.stream_id, 'ts')
+        : '');
+
+  // ── Sync with active DVR recordings on mount and listen to events ──────────
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api) return;
+
+    let mounted = true;
+
+    const checkActive = async () => {
+      try {
+        const result = await api.invoke?.('dvr:list-active');
+        if (!mounted || !result?.recordings) return;
+        const list = result.recordings as any[];
+        const match = list.find(r =>
+          (channel && r.channelName === channel.name) ||
+          (directChannelName && r.channelName === directChannelName) ||
+          (currentStreamUrl && r.streamUrl === currentStreamUrl)
+        );
+        if (match) {
+          setIsRecording(true);
+          setRecordingId(match.id);
+          setBytesWritten(match.size || 0);
+          setElapsedSeconds(match.elapsedSeconds || 0);
+        }
+      } catch {}
+    };
+
+    void checkActive();
+
+    const onStarted = (data: any) => {
+      if (!mounted) return;
+      if (
+        (channel && data.channelName === channel.name) ||
+        (directChannelName && data.channelName === directChannelName) ||
+        (data.recordingId && data.recordingId === recordingIdRef.current)
+      ) {
+        setIsRecording(true);
+        if (data.recordingId) setRecordingId(data.recordingId);
+      }
+    };
+
+    const onProgress = (data: any) => {
+      if (!mounted) return;
+      if (data.recordingId && data.recordingId === recordingIdRef.current) {
+        if (typeof data.bytesWritten === 'number') setBytesWritten(data.bytesWritten);
+        if (typeof data.elapsedSeconds === 'number') setElapsedSeconds(data.elapsedSeconds);
+      }
+    };
+
+    const onCompleted = (data: any) => {
+      if (!mounted) return;
+      if (data.recordingId && data.recordingId === recordingIdRef.current) {
+        setIsRecording(false);
+        setRecordingId(null);
+        setBytesWritten(0);
+        setElapsedSeconds(0);
+      }
+    };
+
+    api.on?.('dvr:started', onStarted);
+    api.on?.('dvr:progress', onProgress);
+    api.on?.('dvr:completed', onCompleted);
+
+    return () => {
+      mounted = false;
+      api.off?.('dvr:started', onStarted);
+      api.off?.('dvr:progress', onProgress);
+      api.off?.('dvr:completed', onCompleted);
+    };
+  }, [channel, directChannelName, currentStreamUrl]);
 
   const sizeClasses = {
     sm: 'w-7 h-7',
@@ -51,30 +162,14 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
     lg: 18,
   };
 
-  const handleQuickRecord = useCallback(async () => {
-    if (isRecording) {
-      if (recordingId) {
-        await window.electronAPI?.invoke?.('dvr:stop', recordingId);
-      }
-      setRecordingId(null);
-      setIsRecording(false);
+  const startRecording = useCallback(async (customTitle?: string, customDurationMin?: number) => {
+    const streamUrl = currentStreamUrl;
+    if (!streamUrl) {
+      const msg = 'Cannot record: Invalid stream URL';
+      setError(msg);
+      toastError(msg);
       return;
     }
-
-    if (variant === 'icon') {
-      setShowDialog(true);
-      return;
-    }
-
-    // Direct recording for full variant
-    startRecording();
-  }, [isRecording, variant]);
-
-  const startRecording = useCallback(async () => {
-    const streamUrl = vodSource?.streamUrl
-      ?? (channel?.direct_source?.trim()
-        ? channel.direct_source
-        : xtream.getLiveStreamUrl(channel!.stream_id, 'm3u8'));
 
     setIsStarting(true);
     setError('');
@@ -82,22 +177,23 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
     try {
       const status = await window.electronAPI?.invoke?.('dvr:status');
       if (status && status.ffmpegAvailable === false) {
-        throw new Error('FFmpeg not available — cannot start recording');
+        throw new Error('FFmpeg binary not detected on system');
       }
       if (status && typeof status.activeCount === 'number' && typeof status.maxConcurrent === 'number'
         && status.activeCount >= status.maxConcurrent) {
         throw new Error(`Max concurrent recordings reached (${status.activeCount}/${status.maxConcurrent})`);
       }
 
-      const title = programTitle.trim()
+      const title = (customTitle || programTitle).trim()
+        || directProgramTitle
         || vodSource?.title
         || program?.title
-        || `Recording ${channel?.name ?? 'Stream'}`;
+        || `Recording ${directChannelName ?? channel?.name ?? 'Stream'}`;
       
-      const resolvedDuration = vodSource?.durationMinutes ?? duration;
+      const resolvedDuration = customDurationMin ?? vodSource?.durationMinutes ?? duration;
       const result = await window.electronAPI?.invoke?.('dvr:start', {
         streamUrl,
-        channelName: channel?.name ?? vodSource?.title ?? 'Recording',
+        channelName: directChannelName ?? channel?.name ?? vodSource?.title ?? 'Recording',
         programTitle: title,
         durationSeconds: resolvedDuration * 60,
       });
@@ -109,12 +205,30 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
       setIsRecording(true);
       setRecordingId(result.recordingId || null);
       setShowDialog(false);
+      success(`Recording started: ${title}`);
     } catch (err: any) {
-      setError(err.message || 'Failed to start recording');
+      const msg = err.message || 'Failed to start recording';
+      setError(msg);
+      toastError(msg);
     } finally {
       setIsStarting(false);
     }
-  }, [channel, program, vodSource, programTitle, duration]);
+  }, [currentStreamUrl, programTitle, directProgramTitle, vodSource, program, directChannelName, channel, duration, success, toastError]);
+
+  const handleQuickRecord = useCallback(async () => {
+    if (isRecording) {
+      info('Stopping recording...');
+      if (recordingId) {
+        await window.electronAPI?.invoke?.('dvr:stop', recordingId);
+      }
+      setRecordingId(null);
+      setIsRecording(false);
+      return;
+    }
+
+    // Instant 1-Touch Recording!
+    startRecording();
+  }, [isRecording, recordingId, startRecording, info]);
 
   return (
     <>
@@ -123,15 +237,20 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
           e.stopPropagation();
           handleQuickRecord();
         }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setShowDialog(true);
+        }}
         className={`${sizeClasses[size]} flex items-center justify-center rounded-full border transition-all ${
           isRecording
-            ? 'border-red-500/40 bg-red-500/20 text-red-400 animate-pulse'
+            ? 'border-red-500 bg-red-500/25 text-red-400 animate-pulse shadow-[0_0_12px_rgba(239,68,68,0.5)]'
             : 'border-white/[0.12] bg-white/[0.06] text-white/60 hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400'
         } ${className}`}
-        title="Record this channel"
+        title={isRecording ? `Recording in progress (${formatSeconds(elapsedSeconds)} • ${formatBytes(bytesWritten)}) — Click to stop` : 'Record stream (Click to record now, Right-click for options)'}
       >
         {isRecording ? (
-          <Circle size={iconSizes[size]} fill="currentColor" />
+          <Square size={iconSizes[size] - 2} fill="currentColor" />
         ) : (
           <Circle size={iconSizes[size]} />
         )}
@@ -152,7 +271,7 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
                   <Circle size={20} />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">Start Recording</h3>
+                  <h3 className="text-lg font-bold text-white">Start DVR Recording</h3>
                   <p className="text-xs text-white/40">{channel?.name ?? vodSource?.title ?? 'Stream'}</p>
                 </div>
               </div>
@@ -174,7 +293,7 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
             <div className="space-y-4">
               <div>
                 <label className="mb-2 block text-xs font-semibold text-white/60">
-                  Recording Name
+                  Recording Title
                 </label>
                 <input
                   type="text"
@@ -197,7 +316,7 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
                   step="5"
                   value={duration}
                   onChange={(e) => setDuration(Number(e.target.value))}
-                  className="w-full"
+                  className="w-full accent-cyan-400"
                 />
                 <div className="mt-1 flex justify-between text-[10px] text-white/30">
                   <span>5 min</span>
@@ -213,7 +332,7 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
                     <Clock size={12} />
                     <span>Current Program</span>
                   </div>
-                  <p className="text-white/60">{program.title}</p>
+                  <p className="text-white/80 font-medium">{program.title}</p>
                   {program.description && (
                     <p className="mt-1 line-clamp-2 text-white/40">{program.description}</p>
                   )}
@@ -230,7 +349,7 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
                 Cancel
               </button>
               <button
-                onClick={startRecording}
+                onClick={() => startRecording()}
                 disabled={isStarting}
                 className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-red-500 to-red-600 py-2.5 text-sm font-bold text-white transition-all hover:from-red-600 hover:to-red-700 disabled:opacity-50"
               >

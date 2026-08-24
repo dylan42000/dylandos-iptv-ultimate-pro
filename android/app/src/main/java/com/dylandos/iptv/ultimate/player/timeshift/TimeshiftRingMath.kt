@@ -7,31 +7,31 @@ package com.dylandos.iptv.ultimate.player.timeshift
  * with a dynamic cap driven by free disk space and (optionally) a user-requested
  * rewind window. No Android dependencies — safe for JVM unit tests.
  *
- * Rules (Firestick-first: USB flash, 2 GB RAM, ~5 Mbps typical stream):
+ * Rules (Firestick-first: USB flash shared with DVR, 2 GB RAM, ~2.5 Mbps typical stream):
  *  - Never below MIN_RING_BYTES (512 MB) unless the disk physically can't hold it
  *    (the caller's write-probe in `PlayerScreen.resolveTimeshiftDirectory` already
- *    refuses targets with < 256 MB free).
- *  - Auto mode: use up to 1/4 of free space, capped at MAX_RING_BYTES (8 GB).
- *    At 5 Mbps, 1/4 of a 32 GB stick ≈ 8 GB ≈ 3.5 h of rewind.
+ *    refuses targets that cannot accommodate the ring plus its safety margin).
+ *  - Auto mode: use up to 1/8 of free space, capped at MAX_RING_BYTES (2 GB).
+ *    This intentionally leaves plenty of space and write bandwidth for DVR.
  *  - Window mode: size for exactly `windowMinutes` of rewind at the estimated
- *    bitrate, but never more than half of free space, still clamped to the bounds.
+ *    bitrate, but never more than one quarter of free space, still clamped to the bounds.
  */
 object TimeshiftRingMath {
 
     /** Absolute floor — matches the old hard cap so behavior never gets worse. */
     const val MIN_RING_BYTES = 512L * 1024L * 1024L          // 512 MB
 
-    /** Absolute ceiling — prevents one channel from eating a whole USB stick. */
-    const val MAX_RING_BYTES = 8L * 1024L * 1024L * 1024L    // 8 GB
+    /** Conservative ceiling — the USB is also used for DVR recordings. */
+    const val MAX_RING_BYTES = 2L * 1024L * 1024L * 1024L    // 2 GB
 
-    /** Auto mode uses up to 1/4 of free space. */
-    const val FREE_SPACE_FRACTION = 4L
+    /** Auto mode uses at most 1/8 of free space. */
+    const val FREE_SPACE_FRACTION = 8L
 
-    /** Window mode never consumes more than half of free space. */
-    const val FREE_SPACE_SAFETY_FACTOR = 2L
+    /** Window mode never consumes more than one quarter of free space. */
+    const val FREE_SPACE_SAFETY_FACTOR = 4L
 
-    /** Typical live-stream bitrate used for window-mode sizing (5 Mbps). */
-    const val DEFAULT_BITRATE_BPS = 5_000_000L
+    /** Conservative live-stream estimate used for window-mode sizing (2.5 Mbps). */
+    const val DEFAULT_BITRATE_BPS = 2_500_000L
 
     /**
      * Compute the ring max size in bytes.
@@ -48,11 +48,11 @@ object TimeshiftRingMath {
         if (freeBytes <= 0L) return MIN_RING_BYTES
         val requested = if (windowMinutes > 0) {
             // Window mode: exact size for the requested rewind, safety-capped at
-            // half the free space so we never fill the drive.
+            // one quarter of free space so we never fill the drive.
             val need = windowMinutes.toLong() * 60L * bitrateBps.coerceAtLeast(1L) / 8L
             minOf(need, freeBytes / FREE_SPACE_SAFETY_FACTOR)
         } else {
-            // Auto mode: 1/4 of free space, never above the ceiling.
+            // Auto mode: 1/8 of free space, never above the ceiling.
             maxOf(MIN_RING_BYTES, freeBytes / FREE_SPACE_FRACTION)
         }
         return requested.coerceIn(MIN_RING_BYTES, MAX_RING_BYTES)

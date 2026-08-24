@@ -96,10 +96,17 @@ const ChannelRow: React.FC<{
 
       {/* Info */}
       <div className="flex-1 min-w-0 text-left">
-        <p className={`text-sm truncate ${isActive ? 'font-semibold' : 'text-white/80'}`}
-          style={isActive ? { color: 'var(--text-accent)' } : undefined}>
-          {channel.name}
-        </p>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <p className={`text-sm truncate ${isActive ? 'font-semibold' : 'text-white/80'}`}
+            style={isActive ? { color: 'var(--text-accent)' } : undefined}>
+            {channel.name}
+          </p>
+          {channel.tv_archive === 1 && (
+            <span className="text-[9px] bg-cyan-900/70 border border-cyan-500/40 text-cyan-300 font-bold px-1.5 py-0.2 rounded shrink-0 shadow-sm" title={`Catch-up available (${channel.tv_archive_duration || 7} days)`}>
+              DVR {channel.tv_archive_duration ? `${channel.tv_archive_duration}d` : ''}
+            </span>
+          )}
+        </div>
         {nowPlaying && (
           <p className="text-white/30 text-[11px] truncate">{nowPlaying.title}</p>
         )}

@@ -94,10 +94,12 @@ class GuideViewModel @Inject constructor(
          * Bump [EPG_DATA_VERSION] whenever stored EPG semantics change (timezone fixes,
          * parser changes) — Room rows parsed by older builds are then force-refreshed
          * once, so users never keep seeing stale shifted grids after an upgrade.
-         * v5.0: v3 = post hour-snapping removal (EpgTimeAligner) + parser fixes.
+         * v5.0.4: v6 forces a clean re-import after restoring Xtream's UTC handling
+         * for offset-less XMLTV/short-EPG values. Provider-zone parsing caused the
+         * persistent six-hour shift on Firestick.
          */
         val KEY_XMLTV_DATA_VERSION = intPreferencesKey("xmltv_data_version")
-        const val EPG_DATA_VERSION = 3
+        const val EPG_DATA_VERSION = 6
         val DEFAULT_THIRD_PARTY_EPG_URL: String = EpgSourceDefaults.DEFAULT_URL_BLOCK
         private const val FAVORITES_CATEGORY_ID = "GUIDE_FAVORITES"
         private val FAVORITES_CATEGORY = XtreamCategory(FAVORITES_CATEGORY_ID, "★ Favorites", 0)
@@ -665,7 +667,8 @@ class GuideViewModel @Inject constructor(
             }
         }
 
-        val providerParsed = xtreamRepository.fetchXmltvEpg(acceptedEpgIds)
+        val timeOffset = prefs[androidx.datastore.preferences.core.intPreferencesKey("epg_time_offset_hours")] ?: 0
+        val providerParsed = xtreamRepository.fetchXmltvEpg(acceptedEpgIds, timeOffset)
         providerProgramCount = providerParsed.programs.size
         storeFreshPrograms(providerParsed)
 

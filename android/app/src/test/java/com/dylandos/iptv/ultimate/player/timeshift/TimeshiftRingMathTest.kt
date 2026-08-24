@@ -6,8 +6,8 @@ import org.junit.Test
 /**
  * v5.0: unit tests for the dynamic timeshift ring sizing math. Pure JVM.
  *
- * Constants: MIN = 512 MB, MAX = 8 GB. Auto mode = 1/4 of free space.
- * Window mode = window × bitrate, capped at half of free space.
+ * Constants: MIN = 512 MB, MAX = 2 GB. Auto mode = 1/8 of free space.
+ * Window mode = window × bitrate, capped at one quarter of free space.
  */
 class TimeshiftRingMathTest {
 
@@ -21,44 +21,44 @@ class TimeshiftRingMathTest {
     }
 
     @Test
-    fun `auto mode uses one quarter of free space`() {
-        // 4 GB free -> 1 GB ring.
-        assertEquals(1 * GB, TimeshiftRingMath.computeRingMaxBytes(4 * GB))
-        // 8 GB free -> 2 GB ring.
-        assertEquals(2 * GB, TimeshiftRingMath.computeRingMaxBytes(8 * GB))
+    fun `auto mode uses one eighth of free space`() {
+        // 8 GB free -> 1 GB ring.
+        assertEquals(1 * GB, TimeshiftRingMath.computeRingMaxBytes(8 * GB))
+        // 16 GB free -> 2 GB ring.
+        assertEquals(2 * GB, TimeshiftRingMath.computeRingMaxBytes(16 * GB))
     }
 
     @Test
     fun `auto mode never drops below the 512MB floor`() {
-        // 1 GB free -> 256 MB would be 1/4, floor kicks in.
+        // 1 GB free -> 128 MB would be 1/8, floor kicks in.
         assertEquals(TimeshiftRingMath.MIN_RING_BYTES, TimeshiftRingMath.computeRingMaxBytes(1 * GB))
     }
 
     @Test
-    fun `auto mode never exceeds the 8GB ceiling`() {
-        // 64 GB free -> 16 GB would be 1/4, ceiling kicks in.
+    fun `auto mode never exceeds the 2GB ceiling`() {
+        // 64 GB free -> 8 GB would be 1/8, ceiling kicks in.
         assertEquals(TimeshiftRingMath.MAX_RING_BYTES, TimeshiftRingMath.computeRingMaxBytes(64 * GB))
-        // 32 GB free -> exactly 8 GB, allowed.
-        assertEquals(TimeshiftRingMath.MAX_RING_BYTES, TimeshiftRingMath.computeRingMaxBytes(32 * GB))
+        // 16 GB free -> exactly 2 GB, allowed.
+        assertEquals(TimeshiftRingMath.MAX_RING_BYTES, TimeshiftRingMath.computeRingMaxBytes(16 * GB))
     }
 
     @Test
     fun `window mode sizes for the requested rewind window`() {
-        // 60 min at 5 Mbps = 60*60*5_000_000/8 = 2_250_000_000 bytes (~2.25 GB).
-        val expected = 60L * 60L * 5_000_000L / 8L
+        // 60 min at 2.5 Mbps = 60*60*2_500_000/8 = 1_125_000_000 bytes.
+        val expected = 60L * 60L * 2_500_000L / 8L
         assertEquals(expected, TimeshiftRingMath.computeRingMaxBytes(10 * GB, windowMinutes = 60))
     }
 
     @Test
-    fun `window mode never exceeds half of free space`() {
-        // Need 2.25 GB but only 2 GB free -> capped at 1 GB.
-        val expected = 1 * GB
+    fun `window mode never exceeds one quarter of free space`() {
+        // Need 1.125 GB but only 2 GB free -> capped at 512 MB.
+        val expected = 512 * MB
         assertEquals(expected, TimeshiftRingMath.computeRingMaxBytes(2 * GB, windowMinutes = 60))
     }
 
     @Test
     fun `window mode still respects the floor on tiny disks`() {
-        // Need 2.25 GB, free/2 = 128 MB -> floor 512 MB wins.
+        // Need 1.125 GB, free/4 = 64 MB -> floor 512 MB wins.
         assertEquals(
             TimeshiftRingMath.MIN_RING_BYTES,
             TimeshiftRingMath.computeRingMaxBytes(256 * MB, windowMinutes = 60)
@@ -67,8 +67,7 @@ class TimeshiftRingMathTest {
 
     @Test
     fun `window mode still respects the ceiling on huge disks`() {
-        // Need 2.25 GB, free/2 = 16 GB -> min is 2.25 GB, but test a 240-min request:
-        // 240*60*5e6/8 = 9 GB -> clamped to MAX.
+        // 240 min needs 4.5 GB, so the conservative 2 GB cap applies.
         assertEquals(
             TimeshiftRingMath.MAX_RING_BYTES,
             TimeshiftRingMath.computeRingMaxBytes(64 * GB, windowMinutes = 240)
@@ -76,11 +75,11 @@ class TimeshiftRingMathTest {
     }
 
     @Test
-    fun `ringHoldsMinutes converts bytes to rewind time at 5 Mbps`() {
-        // 512 MB @ 5 Mbps ≈ 14 min (integer math).
-        assertEquals(14L, TimeshiftRingMath.ringHoldsMinutes(TimeshiftRingMath.MIN_RING_BYTES))
-        // 8 GB @ 5 Mbps ≈ 229 min.
-        assertEquals(229L, TimeshiftRingMath.ringHoldsMinutes(TimeshiftRingMath.MAX_RING_BYTES))
+    fun `ringHoldsMinutes converts bytes to rewind time at 2 point 5 Mbps`() {
+        // 512 MB @ 2.5 Mbps ≈ 28 min (integer math).
+        assertEquals(28L, TimeshiftRingMath.ringHoldsMinutes(TimeshiftRingMath.MIN_RING_BYTES))
+        // 2 GB @ 2.5 Mbps ≈ 114 min.
+        assertEquals(114L, TimeshiftRingMath.ringHoldsMinutes(TimeshiftRingMath.MAX_RING_BYTES))
     }
 
     @Test

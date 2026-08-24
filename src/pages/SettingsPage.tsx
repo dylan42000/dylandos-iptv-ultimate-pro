@@ -904,7 +904,17 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 description="Continue from where you left off"
               />
             </Section>
-            <Section title="Performance">
+            <Section title="Performance & Player Engine">
+              <SelectInput
+                value={settings.preferredEngine || 'mpv'}
+                onChange={v => update({ preferredEngine: v as 'mpv' | 'hlsjs' })}
+                label="Video Player Engine"
+                description="Engine used to render live and on-demand video streams"
+                options={[
+                  { value: 'mpv', label: 'MPV Native Engine (DirectX 11 GPU, Timeshift & Hardware Decode) - Recommended' },
+                  { value: 'hlsjs', label: 'Built-in HTML5 / HLS.js Engine (Standard Web Media Engine)' },
+                ]}
+              />
               <SelectInput
                 value={settings.hardwareAcceleration ? 'on' : 'off'}
                 onChange={v => update({ hardwareAcceleration: v === 'on' })}
@@ -947,6 +957,88 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 min={-5000}
                 max={5000}
                 step={50}
+              />
+            </Section>
+            <Section title="Live Timeshift (Pause / Rewind Live TV)">
+              <Toggle
+                checked={settings.liveTimeshiftEnabled !== false}
+                onChange={v => update({ liveTimeshiftEnabled: v })}
+                label="Enable Live Timeshift Buffer"
+                description="Allows pausing, rewinding, and scrubbing live television streams seamlessly"
+              />
+              <SelectInput
+                value={settings.liveTimeshiftBufferSize || 'large'}
+                onChange={v => update({ liveTimeshiftBufferSize: v as 'standard' | 'large' | 'max' | 'ultra' })}
+                label="Timeshift Buffer Size"
+                description="Amount of RAM dedicated to backward live scrub buffer"
+                options={[
+                  { value: 'standard', label: 'Standard (256 MB / ~10 minutes)' },
+                  { value: 'large', label: 'Large (512 MB / ~30 minutes) - Recommended' },
+                  { value: 'max', label: 'Maximum (1024 MB / ~1 hour)' },
+                  { value: 'ultra', label: 'Ultra (2048 MB / ~2 hours)' },
+                ]}
+              />
+            </Section>
+            <Section title="DVR & Recording Engine">
+              <div className="py-2">
+                <div className="flex items-center justify-between mb-1.5">
+                  <div>
+                    <p className="text-white/80 text-sm font-medium">Default DVR Recording Folder</p>
+                    <p className="text-white/30 text-xs mt-0.5">Location where recorded TV streams are saved</p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const result = await window.electronAPI?.invoke?.('dialog:show-open', {
+                          properties: ['openDirectory', 'createDirectory'],
+                          title: 'Select Default DVR Recording Folder',
+                        });
+                        if (result && !result.canceled && Array.isArray(result.filePaths) && result.filePaths.length > 0) {
+                          const dir = result.filePaths[0];
+                          update({ dvrOutputDir: dir });
+                          await window.electronAPI?.invoke?.('dvr:set-output-dir', dir);
+                          success('DVR recording folder updated');
+                        }
+                      } catch {}
+                    }}
+                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-lg transition-colors"
+                  >
+                    Browse...
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={settings.dvrOutputDir || ''}
+                  onChange={e => update({ dvrOutputDir: e.target.value })}
+                  placeholder="Default: Videos\DYLANDOS IPTV DVR"
+                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-500/40"
+                />
+              </div>
+              <SelectInput
+                value={settings.dvrFormat || 'ts'}
+                onChange={v => update({ dvrFormat: v as 'ts' | 'mkv' | 'mp4' })}
+                label="Recording File Format"
+                description="MPEG-TS is the safest format against stream interruptions"
+                options={[
+                  { value: 'ts', label: 'MPEG-TS (.ts) - Best reliability' },
+                  { value: 'mkv', label: 'Matroska (.mkv)' },
+                  { value: 'mp4', label: 'MP4 (.mp4 - Fragmented)' },
+                ]}
+              />
+              <NumberInput
+                value={settings.dvrMaxConcurrent || 3}
+                onChange={v => update({ dvrMaxConcurrent: Math.max(1, Math.min(10, v)) })}
+                label="Max Concurrent Recordings"
+                description="Simultaneous stream recordings allowed"
+                min={1}
+                max={10}
+              />
+              <TextInput
+                value={settings.liveUserAgent || 'IPTVSmartersPro'}
+                onChange={v => update({ liveUserAgent: v })}
+                label="IPTV User-Agent"
+                description="User-Agent sent to IPTV server to prevent anti-restream disconnection (default: IPTVSmartersPro)"
+                placeholder="IPTVSmartersPro"
               />
             </Section>
           </>

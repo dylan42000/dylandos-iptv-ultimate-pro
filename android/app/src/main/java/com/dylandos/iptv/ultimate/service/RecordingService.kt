@@ -13,6 +13,7 @@ import com.dylandos.iptv.ultimate.data.repository.DvrRecordingRepository
 import com.dylandos.iptv.ultimate.ui.screens.dvr.DvrEvent
 import com.dylandos.iptv.ultimate.ui.screens.dvr.DvrRecording
 import com.dylandos.iptv.ultimate.data.util.StorageDetector
+import com.dylandos.iptv.ultimate.ui.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -75,6 +76,7 @@ class RecordingService : Service() {
         const val EXTRA_RECORDING_ID  = "recording_id"
         const val EXTRA_STREAM_URL    = "stream_url"
         const val EXTRA_CHANNEL_NAME  = "channel_name"
+        const val EXTRA_PROGRAM_TITLE = "program_title"
         const val EXTRA_STORAGE_URI   = "storage_uri"
         const val EXTRA_SLOT          = "slot"           // 1, 2, or 3
         const val EXTRA_PROVIDER_NAME = "provider_name" // server hostname — used for per-provider subfolders
@@ -97,6 +99,7 @@ class RecordingService : Service() {
     private data class RecordingSlot(
         val recordingId: String,
         val channelName: String,
+        val programTitle: String,
         val startTimeMs: Long,
         val outputPath: String,          // absolute file path (OTG or internal)
         val permanentUri: String,        // same as outputPath for non-SAF recordings
@@ -128,6 +131,7 @@ class RecordingService : Service() {
                 val id           = intent.getStringExtra(EXTRA_RECORDING_ID) ?: return START_NOT_STICKY
                 val url          = intent.getStringExtra(EXTRA_STREAM_URL)   ?: return START_NOT_STICKY
                 val channelName  = intent.getStringExtra(EXTRA_CHANNEL_NAME) ?: "Channel"
+                val programTitle = intent.getStringExtra(EXTRA_PROGRAM_TITLE) ?: ""
                 val storageUri   = intent.getStringExtra(EXTRA_STORAGE_URI)  // nullable — OTG/SAF path
                 val providerName = intent.getStringExtra(EXTRA_PROVIDER_NAME)  // nullable — server hostname
                 val stopAtMs     = intent.getLongExtra(EXTRA_STOP_AT_MS, 0L)
@@ -174,11 +178,12 @@ class RecordingService : Service() {
                             id = id,
                             channelName = channelName,
                             channelId = extractChannelId(url),
-                            streamUrl = url
+                            streamUrl = url,
+                            programTitle = programTitle
                         )
                     )
                 }
-                doStartRecording(id, url, channelName, storageUri, providerName)
+                doStartRecording(id, url, channelName, storageUri, providerName, programTitle)
                 if (slots.containsKey(id)) scheduleAutoStop(id, stopAtMs)
             }
 
@@ -233,7 +238,51 @@ class RecordingService : Service() {
             .getOrElse { LibVLC(this, fallback) }
     }
 
-    private fun doStartRecording(id: String, url: String, channelName: String, storageUriString: String?, providerName: String? = null) {
+    private fun formatRecordingFilename(channelName: String, programTitle: String?): String {
+        val dateStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        if (programTitle.isNullOrBlank()) {
+            val safe = channelName.replace(Regex("[^A-Za-z0-9_\\-]"), "_").take(40)
+            return "${safe}_${dateStamp}.ts"
+        }
+        val safeProgram = programTitle.replace(Regex("[\\\\/:*?\"<>|]"), "").trim().take(45)
+        val safeChannel = channelName.replace(Regex("[\\\\/:*?\"<>|]"), "").trim().take(25)
+        val dateDisplay = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        return "$safeProgram ($dateDisplay $safeChannel).ts"
+    }
+
+    private fun writeNfoSidecar(
+        outputTsFile: File,
+        channelName: String,
+        programTitle: String?,
+        startTimeMs: Long
+    ) {
+        if (programTitle.isNullOrBlank()) return
+        runCatching {
+            val nfoFile = File(outputTsFile.parentFile, outputTsFile.nameWithoutExtension + ".nfo")
+            val dateDisplay = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(startTimeMs))
+            val xml = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <episodedetails>
+                    <title>${programTitle.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}</title>
+                    <showtitle>${programTitle.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}</showtitle>
+                    <aired>$dateDisplay</aired>
+                    <studio>${channelName.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}</studio>
+                    <plot>Recorded from $channelName on $dateDisplay via Dylandos IPTV Ultimate.</plot>
+                </episodedetails>
+            """.trimIndent()
+            nfoFile.writeText(xml, Charsets.UTF_8)
+            Timber.i("DVR sidecar written: ${nfoFile.absolutePath}")
+        }.onFailure { Timber.w(it, "Failed to write DVR .nfo sidecar") }
+    }
+
+    private fun doStartRecording(
+        id: String,
+        url: String,
+        channelName: String,
+        storageUriString: String?,
+        providerName: String? = null,
+        programTitle: String = ""
+    ) {
         try {
             // Resolve the best available output directory. USB public Download is
             // preferred because Firestick users can verify the file directly there.
@@ -244,11 +293,11 @@ class RecordingService : Service() {
                 return
             }
 
-            // Sanitize filename
-            val safe = channelName.replace(Regex("[^A-Za-z0-9_\\-]"), "_").take(40)
-            val date = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val fileName = "${safe}_${date}.ts"
+            // Intelligent EPG Show-Aware Filename
+            val fileName = formatRecordingFilename(channelName, programTitle)
             val outputAbsPath = "${outputDir.absolutePath}/$fileName"
+            val outputTsFile = File(outputAbsPath)
+            writeNfoSidecar(outputTsFile, channelName, programTitle, System.currentTimeMillis())
 
             // Firesticks often run tight on internal space. Do not auto-fail at
             // the old 64 MB cliff; only block when the target cannot hold even a
@@ -265,7 +314,7 @@ class RecordingService : Service() {
                 Timber.w("DVR: storage stats unknown for ${outputDir.absolutePath}; probe passed, attempting recording")
             }
 
-            Timber.i("DVR START: $channelName → $outputAbsPath  (freeGB=${"%.2f".format(freeBytes / 1_073_741_824f)})")
+            Timber.i("DVR START: $channelName [$programTitle] → $outputAbsPath  (freeGB=${"%.2f".format(freeBytes / 1_073_741_824f)})")
             dvrRepo.updateFilePath(id, outputAbsPath)
 
             // TEE is the preferred path when recording the same live channel currently
@@ -283,6 +332,7 @@ class RecordingService : Service() {
                 val slot = RecordingSlot(
                     recordingId  = id,
                     channelName  = channelName,
+                    programTitle = programTitle,
                     startTimeMs  = System.currentTimeMillis(),
                     outputPath   = outputAbsPath,
                     permanentUri = outputAbsPath,
@@ -314,7 +364,7 @@ class RecordingService : Service() {
             }
 
             if (shouldUseRawHttpCopy(url)) {
-                startHttpStreamRecording(id, url, channelName, outputAbsPath)
+                startHttpStreamRecording(id, url, channelName, outputAbsPath, programTitle)
                 return
             }
 
@@ -343,6 +393,7 @@ class RecordingService : Service() {
             val slot = RecordingSlot(
                 recordingId  = id,
                 channelName  = channelName,
+                programTitle = programTitle,
                 startTimeMs  = System.currentTimeMillis(),
                 outputPath   = outputAbsPath,
                 permanentUri = outputAbsPath,
@@ -424,11 +475,13 @@ class RecordingService : Service() {
         id: String,
         url: String,
         channelName: String,
-        outputAbsPath: String
+        outputAbsPath: String,
+        programTitle: String = ""
     ) {
         val slot = RecordingSlot(
             recordingId = id,
             channelName = channelName,
+            programTitle = programTitle,
             startTimeMs = System.currentTimeMillis(),
             outputPath = outputAbsPath,
             permanentUri = outputAbsPath,
@@ -445,7 +498,7 @@ class RecordingService : Service() {
         startStaleWatchdog(id)
         verifyRecordingStart(id)
         updateNotification()
-        Timber.i("DVR HTTP recorder started: $channelName → $outputAbsPath")
+        Timber.i("DVR HTTP recorder started: $channelName [$programTitle] → $outputAbsPath")
     }
 
     private suspend fun recordHttpLoop(id: String, streamUrl: String, outputAbsPath: String) {
@@ -1062,6 +1115,15 @@ class RecordingService : Service() {
     // ── Notification ──────────────────────────────────────────────────────────
 
     private fun buildNotification(): Notification {
+        val openDvrIntent = PendingIntent.getActivity(
+            this,
+            1,
+            Intent(this, MainActivity::class.java).apply {
+                action = MainActivity.ACTION_OPEN_DVR
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val stopAllIntent = PendingIntent.getService(
             this, 0,
             Intent(this, RecordingService::class.java).apply { action = ACTION_STOP_ALL },
@@ -1075,6 +1137,8 @@ class RecordingService : Service() {
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle("DYLANDOS DVR — $activeCount recording${if (activeCount != 1) "s" else ""} active")
             .setContentText(namesPreview.ifEmpty { "Starting…" })
+            .setContentIntent(openDvrIntent)
+            .addAction(android.R.drawable.ic_menu_view, "Open DVR", openDvrIntent)
             .addAction(android.R.drawable.ic_media_pause, "Stop All", stopAllIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

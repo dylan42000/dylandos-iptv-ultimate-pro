@@ -110,30 +110,6 @@ fun SettingsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.DirectionRight -> {
-                        if (selectedTab >= tabCount - 3 && selectedTab < tabCount - 1) {
-                            selectedTab += 1
-                            runCatching { tabFocusRequesters[selectedTab].requestFocus() }
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    Key.DirectionLeft -> {
-                        if (selectedTab > tabCount - 3 && selectedTab <= tabCount - 1) {
-                            selectedTab -= 1
-                            runCatching { tabFocusRequesters[selectedTab].requestFocus() }
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    else -> false
-                }
-            }
             .dylandosScreenBackground()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -1385,6 +1361,14 @@ private fun EpgTab(state: SettingsUiState, viewModel: SettingsViewModel) {
         }
         SliderRow("Refresh interval (hours)", state.epgRefreshIntervalHours.toFloat(), 1f..24f, steps = 22) {
             viewModel.setEpgRefreshHours(it.toInt())
+        }
+        SliderRow(
+            label = "EPG Time Offset (hours)",
+            value = state.epgTimeOffsetHours.toFloat(),
+            range = -12f..12f,
+            steps = 23
+        ) {
+            viewModel.setEpgTimeOffsetHours(it.toInt())
         }
 
         SectionHeader("Display")

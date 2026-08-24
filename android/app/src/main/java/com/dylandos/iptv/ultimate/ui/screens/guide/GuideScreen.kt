@@ -54,6 +54,7 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import com.dylandos.iptv.ultimate.data.model.XtreamChannel
 import com.dylandos.iptv.ultimate.data.model.XtreamEpgProgram
@@ -221,14 +222,25 @@ fun GuideScreen(
         }
     }
 
+    var shouldRestoreFocusOnResume by remember { mutableStateOf(false) }
+
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.syncFocusedChannelFromPlayback()
+                shouldRestoreFocusOnResume = true
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(shouldRestoreFocusOnResume) {
+        if (shouldRestoreFocusOnResume) {
+            shouldRestoreFocusOnResume = false
+            delay(100)
+            runCatching { gridFocusRequester.requestFocus() }
+        }
     }
 
     // Program options dialog state
@@ -370,13 +382,11 @@ fun GuideScreen(
             title = { Text(dlg.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
             text  = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(dlg.channelName, color = TextSecondary, fontSize = 13.sp)
-                    val fmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
-                        timeZone = java.util.TimeZone.getDefault()
-                    }
-                    val start = fmt.format(java.util.Date(dlg.startMs))
-                    val end   = fmt.format(java.util.Date(dlg.endMs))
-                    Text("$start – $end", color = TextTertiary, fontSize = 12.sp)
+                    Text(
+                        text = com.dylandos.iptv.ultimate.ui.util.TimeFormatter.formatTimeRange(dlg.startMs, dlg.endMs),
+                        color = TextTertiary,
+                        fontSize = 12.sp
+                    )
 
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = {
@@ -408,7 +418,22 @@ fun GuideScreen(
                             endMs = dlg.endMs,
                             closeDialog = { programDialog = null }
                         )
-                    }) { Text("Schedule Recording", color = AccentSecondary) }
+                    }) { Text("Schedule This Program (${dlg.title})", color = AccentSecondary) }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = {
+                            dvrViewModel.recordLiveChannelForDuration(dlg.channelName, dlg.channelId, 30, null, dlg.title)
+                            programDialog = null
+                        }) { Text("Record 30m", color = AccentBright, fontSize = 12.sp) }
+                        TextButton(onClick = {
+                            dvrViewModel.recordLiveChannelForDuration(dlg.channelName, dlg.channelId, 60, null, dlg.title)
+                            programDialog = null
+                        }) { Text("Record 1h", color = AccentBright, fontSize = 12.sp) }
+                        TextButton(onClick = {
+                            dvrViewModel.recordLiveChannelForDuration(dlg.channelName, dlg.channelId, 120, null, dlg.title)
+                            programDialog = null
+                        }) { Text("Record 2h", color = AccentBright, fontSize = 12.sp) }
+                    }
 
                     TextButton(onClick = {
                         requestSeriesOrKeywordRule(
@@ -444,13 +469,29 @@ fun GuideScreen(
             onDismissRequest = { guideRecordMenu = null },
             title = {
                 Text(
-                    text = "${menu.channel.name} - Recording Options",
+                    text = "${menu.channel.name} - Recording & Live Options",
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val accounts = dvrState.recordingAccounts
+                    if (accounts.size > 1) {
+                        Surface(
+                            color = AccentSurface,
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
+                        ) {
+                            Text(
+                                "Dual-Subscription Active: DVR recordings auto-route to secondary account",
+                                color = Accent,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
                     TextButton(onClick = {
                         navController.navigateSafe(
                             Screen.Player.createRoute("live", menu.channel.streamId.toString(), "ts")
@@ -460,20 +501,35 @@ fun GuideScreen(
                         Text("Watch Channel Now", color = Accent)
                     }
 
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = {
+                            dvrViewModel.recordLiveChannelForDuration(menu.channel.name, menu.channel.streamId, 30, null, menu.currentProgram?.title)
+                            guideRecordMenu = null
+                        }) { Text("Record 30m", color = AccentSecondary, fontSize = 12.sp) }
+                        TextButton(onClick = {
+                            dvrViewModel.recordLiveChannelForDuration(menu.channel.name, menu.channel.streamId, 60, null, menu.currentProgram?.title)
+                            guideRecordMenu = null
+                        }) { Text("Record 1h", color = AccentSecondary, fontSize = 12.sp) }
+                        TextButton(onClick = {
+                            dvrViewModel.recordLiveChannelForDuration(menu.channel.name, menu.channel.streamId, 120, null, menu.currentProgram?.title)
+                            guideRecordMenu = null
+                        }) { Text("Record 2h", color = AccentSecondary, fontSize = 12.sp) }
+                    }
+
                     TextButton(onClick = {
-                        val accounts = dvrState.recordingAccounts
                         if (accounts.size > 1) {
                             recordingChannelToPick = menu.channel
                         } else {
                             dvrViewModel.recordLiveChannel(
                                 channelName = menu.channel.name,
                                 streamId = menu.channel.streamId,
-                                accountId = accounts.firstOrNull()?.id
+                                accountId = accounts.firstOrNull()?.id,
+                                programTitle = menu.currentProgram?.title
                             )
                         }
                         guideRecordMenu = null
                     }) {
-                        Text("Record Channel Now", color = AccentSecondary)
+                        Text("Record Channel (Until Stopped)", color = AccentSecondary)
                     }
 
                     menu.currentProgram?.let { current ->
@@ -744,13 +800,29 @@ fun GuideScreen(
                 IconButton(onClick = { navController.popBackStackSafeDebounced() }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Accent)
                 }
-                Text(
-                    "TV GUIDE",
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 2.sp,
-                    fontSize = 16.sp
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "TV GUIDE",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 2.sp,
+                        fontSize = 16.sp
+                    )
+                    val liveClock = com.dylandos.iptv.ultimate.ui.util.rememberLiveClock()
+                    Surface(
+                        color = BgSurface2,
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.Schedule, contentDescription = null, tint = Accent, modifier = Modifier.size(14.dp))
+                            Text(liveClock, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { viewModel.shiftBack() }) {
                         Icon(Icons.Default.ChevronLeft, "Back 2h", tint = Accent, modifier = Modifier.size(28.dp))
@@ -1333,11 +1405,6 @@ private fun TimeRulerRow(
     hScrollState: androidx.compose.foundation.ScrollState
 ) {
     val now = System.currentTimeMillis()
-    val sdf = remember {
-        SimpleDateFormat("h:mm a", Locale.getDefault()).apply {
-            timeZone = java.util.TimeZone.getDefault()
-        }
-    }
     val slotCount = windowMinutes / 30
     val slotWidthDp = DP_PER_MINUTE * 30
 
@@ -1377,7 +1444,7 @@ private fun TimeRulerRow(
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        text = sdf.format(Date(slotStartMs)),
+                        text = com.dylandos.iptv.ultimate.ui.util.TimeFormatter.formatShortTime(slotStartMs),
                         color = if (isCurrentSlot) AccentBright else TextSecondary,
                         fontSize = 12.sp,
                         fontWeight = if (isCurrentSlot) FontWeight.Bold else FontWeight.Normal
@@ -1619,13 +1686,7 @@ private fun NowIndicator(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 private fun formatWindowLabel(windowStartMs: Long): String =
-    SimpleDateFormat("EEE, MMM d  h:mm a", Locale.getDefault()).apply {
-        timeZone = java.util.TimeZone.getDefault()
-    }.format(Date(windowStartMs))
+    com.dylandos.iptv.ultimate.ui.util.TimeFormatter.formatWindowLabel(windowStartMs)
 
-private fun formatProgramTime(startMs: Long, endMs: Long): String {
-    val sdf = SimpleDateFormat("h:mm a", Locale.getDefault()).apply {
-        timeZone = java.util.TimeZone.getDefault()
-    }
-    return "${sdf.format(Date(startMs))} – ${sdf.format(Date(endMs))}"
-}
+private fun formatProgramTime(startMs: Long, endMs: Long): String =
+    com.dylandos.iptv.ultimate.ui.util.TimeFormatter.formatTimeRange(startMs, endMs)

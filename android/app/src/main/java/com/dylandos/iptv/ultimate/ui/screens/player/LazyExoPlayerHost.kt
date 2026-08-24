@@ -26,7 +26,7 @@ class LazyExoPlayerHost(
     companion object {
         /**
          * Media3 timeshift ring floor — 512 MB. v5.0 sizes the ring dynamically
-         * (TimeshiftRingMath) up to 8 GB based on free USB space / user window;
+         * (TimeshiftRingMath) up to 2 GB based on free USB space / user window;
          * this constant remains as the minimum for callers that need a number.
          */
         const val TIMESHIFT_CACHE_BYTES = TimeshiftRingMath.MIN_RING_BYTES
@@ -48,26 +48,30 @@ class LazyExoPlayerHost(
     ): ExoPlayer = synchronized(lock) {
         player?.let { return it }
 
-        val cache = if (timeshiftEnabled && !timeshiftPath.isNullOrBlank()) {
+        val cache = if (timeshiftEnabled) {
             timeshiftCache ?: runCatching {
-                val cacheDir = File(timeshiftPath, "media3_cache").also { it.mkdirs() }
+                val effectiveDir = if (!timeshiftPath.isNullOrBlank()) {
+                    File(timeshiftPath, "media3_cache")
+                } else {
+                    File(context.cacheDir, "timeshift_ring")
+                }.also { it.mkdirs() }
                 // v5.0: dynamic ring — cap = explicit override, else TimeshiftRingMath
-                // auto sizing (max(512 MB, min(free/4, 8 GB))). Old builds used a
+                // auto sizing (max(512 MB, min(free/8, 2 GB))). Old builds used a
                 // fixed 512 MB regardless of free space.
-                val freeBytes = maxOf(cacheDir.usableSpace, cacheDir.freeSpace)
+                val freeBytes = maxOf(effectiveDir.usableSpace, effectiveDir.freeSpace)
                 val ringCapBytes = ringMaxBytes
                     ?: TimeshiftRingMath.computeRingMaxBytes(freeBytes)
                 Timber.i(
-                    "Timeshift ring: cap=${ringCapBytes / (1024 * 1024)}MB " +
+                    "Timeshift ring: cap=${ringCapBytes / (1024 * 1024)}MB on ${effectiveDir.absolutePath} " +
                     "(free=${freeBytes / (1024 * 1024)}MB, holds ~" +
-                    "${TimeshiftRingMath.ringHoldsMinutes(ringCapBytes)}min @5Mbps)"
+                    "${TimeshiftRingMath.ringHoldsMinutes(ringCapBytes)}min @${TimeshiftRingMath.DEFAULT_BITRATE_BPS / 1_000_000}Mbps)"
                 )
                 SimpleCache(
-                    cacheDir,
+                    effectiveDir,
                     LeastRecentlyUsedCacheEvictor(ringCapBytes),
                     StandaloneDatabaseProvider(context)
                 )
-            }.onFailure { Timber.e(it, "Unable to create USB timeshift cache") }
+            }.onFailure { Timber.e(it, "Unable to create timeshift cache") }
                 .getOrNull()
                 .also { timeshiftCache = it }
         } else null
@@ -85,16 +89,23 @@ class LazyExoPlayerHost(
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         } ?: dataSourceFactory
         val loadControl = DefaultLoadControl.Builder()
-            .setBackBuffer(
-                if (timeshiftEnabled) 15 * 60_000 else 0,
-                true
-            )
+            // Rewind is served by the USB SimpleCache, not by retaining minutes of
+            // decoded media in RAM.  The old 15-minute back buffer could exhaust a
+            // 2 GB Firestick after 5–10 minutes of live TV.
+            .setBackBuffer(if (timeshiftEnabled) 20_000 else 0, false)
+            .build()
+        val trackParams = androidx.media3.common.TrackSelectionParameters.Builder(context)
+            .setPreferredTextLanguage("en")
+            .setSelectUndeterminedTextLanguage(true)
             .build()
         ExoPlayer.Builder(context)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(DefaultMediaSourceFactory(playbackDataSourceFactory))
             .build()
-            .apply { playWhenReady = true }
+            .apply {
+                trackSelectionParameters = trackParams
+                playWhenReady = true
+            }
             .also {
                 player = it
                 val capForLog = (ringMaxBytes

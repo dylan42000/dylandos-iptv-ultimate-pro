@@ -1,4 +1,4 @@
-﻿package com.dylandos.iptv.ultimate.ui.screens.livetv
+package com.dylandos.iptv.ultimate.ui.screens.livetv
 
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -500,8 +500,11 @@ class LiveTvViewModel @Inject constructor(
         }
         unmatched.forEach { apiIds += it.streamId }
 
+        val prefs = context.dataStore.data.first()
+        val timeOffset = prefs[androidx.datastore.preferences.core.intPreferencesKey("epg_time_offset_hours")] ?: 0
+
         roomMap + if (apiIds.isEmpty()) emptyMap()
-        else xtreamRepository.batchShortEpg(apiIds, limit = 6)
+        else xtreamRepository.batchShortEpg(apiIds, limit = 6, timeOffsetHours = timeOffset)
     }
 
     private fun refreshXmltvInBackground(channels: List<XtreamChannel>) {
@@ -521,7 +524,8 @@ class LiveTvViewModel @Inject constructor(
             val acceptedIds = channels.mapNotNull {
                 it.epgChannelId?.takeIf(String::isNotBlank)
             }.toSet()
-            val providerParsed = xtreamRepository.fetchXmltvEpg(acceptedIds)
+            val timeOffset = prefs[androidx.datastore.preferences.core.intPreferencesKey("epg_time_offset_hours")] ?: 0
+            val providerParsed = xtreamRepository.fetchXmltvEpg(acceptedIds, timeOffset)
             val thirdPartyEnabled = prefs[GuideViewModel.KEY_EPG_THIRD_PARTY_ENABLED] ?: true
             var storedPrograms = 0
             var clearedCurrentGuide = false

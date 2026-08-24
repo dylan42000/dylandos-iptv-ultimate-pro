@@ -1441,6 +1441,9 @@ export const App: React.FC = () => {
             channels={displayChannels}
             movies={displayMovies}
             series={displaySeries}
+            vodCategoriesCount={displayVodCategories.length}
+            seriesCategoriesCount={displaySeriesCategories.length}
+            totalChannelsCount={displayChannels.length}
             favorites={favorites}
             epgData={epgData}
             profileId={activeProfileId}
@@ -1577,6 +1580,7 @@ export const App: React.FC = () => {
             <DVRPage
               channels={channels}
               onPlayRecording={handlePlayRecording}
+              onPlayCatchup={handlePlayCatchup}
             />
           </div>
         );

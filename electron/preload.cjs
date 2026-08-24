@@ -83,6 +83,7 @@ const validInvokeChannels = new Set([
   'mpv:stop',
   'mpv:seek',
   'mpv:seek-relative',
+  'mpv:jump-to-live',
   'mpv:set-volume',
   'mpv:set-mute',
   'mpv:set-fullscreen',

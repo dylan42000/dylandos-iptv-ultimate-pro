@@ -25,10 +25,13 @@
 -keep class dagger.hilt.** { *; }
 -keep class dagger.hilt.android.internal.** { *; }
 -keep class * extends dagger.hilt.android.internal.managers.ViewComponentManager$FragmentContextWrapper { *; }
+-dontwarn dagger.hilt.**
+-dontwarn hilt_aggregated_deps.**
 
 # Dagger framework
 -keep class dagger.** { *; }
 -keep class javax.inject.** { *; }
+-dontwarn dagger.**
 
 # Hilt-generated component holders (package-level, often missed)
 -keep class *._HiltComponents { *; }

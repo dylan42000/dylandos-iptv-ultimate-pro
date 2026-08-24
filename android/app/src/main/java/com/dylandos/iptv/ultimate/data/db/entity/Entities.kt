@@ -107,7 +107,8 @@ data class DvrRecordingEntity(
     val startTimeMs: Long,
     val endTimeMs: Long,                        // 0 if still recording
     val fileSizeBytes: Long = 0L,
-    val status: String = "COMPLETED"            // "RECORDING" | "COMPLETED" | "FAILED"
+    val status: String = "COMPLETED",           // "RECORDING" | "COMPLETED" | "FAILED"
+    val programTitle: String = ""
 )
 
 /**

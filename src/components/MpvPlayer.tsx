@@ -22,11 +22,19 @@ import {
   Loader2,
   BarChart2,
   Circle,
+  Clock,
+  FastForward,
+  Rewind,
+  Radio,
+  History,
+  Calendar,
+  X,
 } from 'lucide-react';
 import { useMpv } from '../hooks/useMpv';
 import { useSettings } from '../hooks/useSettings';
 import { MpvStatsOverlay } from './MpvStatsOverlay';
 import { RecordingButton } from './RecordingButton';
+import { xtreamApi as xtream } from '../services/xtreamApi';
 import type { XtreamChannel } from '../types/xtream';
 import type { EPGProgram } from '../types/epg';
 
@@ -112,6 +120,38 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
   const [showAudioMenu, setShowAudioMenu] = useState(false);
   const [showSubMenu, setShowSubMenu]   = useState(false);
   const [showStats, setShowStats]       = useState(false);
+  const [showCatchupDrawer, setShowCatchupDrawer] = useState(false);
+  const [catchupPrograms, setCatchupPrograms] = useState<any[]>([]);
+  const [loadingCatchup, setLoadingCatchup] = useState(false);
+
+  const toggleCatchup = useCallback(async () => {
+    if (!activeChannel) return;
+    const nextState = !showCatchupDrawer;
+    setShowCatchupDrawer(nextState);
+    if (nextState) {
+      setLoadingCatchup(true);
+      try {
+        const data = await xtream.getShortEpg(activeChannel.stream_id, 40);
+        if (data?.epg_listings && Array.isArray(data.epg_listings)) {
+          setCatchupPrograms(data.epg_listings);
+        }
+      } catch {
+        setCatchupPrograms([]);
+      } finally {
+        setLoadingCatchup(false);
+      }
+    }
+  }, [activeChannel, showCatchupDrawer]);
+
+  const playCatchupItem = useCallback((item: any) => {
+    if (!activeChannel) return;
+    const startTs = item.start_timestamp ? Number(item.start_timestamp) * 1000 : new Date(item.start).getTime();
+    const stopTs = item.stop_timestamp ? Number(item.stop_timestamp) * 1000 : new Date(item.end).getTime();
+    const durationMin = Math.max(5, Math.round((stopTs - startTs) / 60000));
+    const url = xtream.getCatchupStreamUrl(activeChannel.stream_id, new Date(startTs), durationMin);
+    setShowCatchupDrawer(false);
+    actions.loadVodStream(url, 0);
+  }, [activeChannel, actions]);
 
   const osdTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const zapDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -213,13 +253,36 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
       switch (e.key) {
         case ' ':
         case 'k':
+        case 'K':
           e.preventDefault();
           actions.togglePlayPause();
+          break;
+        case 'j':
+        case 'J':
+          e.preventDefault();
+          actions.seekRelative(e.shiftKey ? -60 : -10);
+          break;
+        case 'l':
+        case 'L':
+          e.preventDefault();
+          if (e.shiftKey) {
+            actions.jumpToLive();
+          } else {
+            actions.seekRelative(10);
+          }
+          break;
+        case 'Home':
+          if (streamType === 'live') {
+            e.preventDefault();
+            actions.jumpToLive();
+          }
           break;
         case 'ArrowRight':
           e.preventDefault();
           if (streamType === 'vod') {
             actions.seekRelative(e.shiftKey ? 30 : e.ctrlKey ? 60 : 10);
+          } else if (e.ctrlKey || e.shiftKey) {
+            actions.seekRelative(e.shiftKey ? 60 : 10);
           } else {
             onChannelUp?.();
           }
@@ -228,6 +291,8 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
           e.preventDefault();
           if (streamType === 'vod') {
             actions.seekRelative(e.shiftKey ? -30 : e.ctrlKey ? -60 : -10);
+          } else if (e.ctrlKey || e.shiftKey) {
+            actions.seekRelative(e.shiftKey ? -60 : -10);
           } else {
             onChannelDown?.();
           }
@@ -425,6 +490,21 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
               </span>
             )}
 
+            {/* Provider Catch-up button */}
+            {streamType === 'live' && activeChannel && activeChannel.tv_archive === 1 && (
+              <button
+                onClick={toggleCatchup}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all border shadow-md ${
+                  showCatchupDrawer
+                    ? 'bg-cyan-400 text-black border-white'
+                    : 'bg-cyan-950/80 hover:bg-cyan-900/90 text-cyan-300 border-cyan-500/40'
+                }`}
+                title={`Provider Catch-up available (${activeChannel.tv_archive_duration || 7} days archive)`}
+              >
+                <History size={13} /> Catch-up ({activeChannel.tv_archive_duration || 7}d)
+              </button>
+            )}
+
             {/* LIVE badge */}
             {streamType === 'live' && (
               <div className="flex items-center gap-1.5 bg-red-600 px-3 py-1 rounded-full">
@@ -503,6 +583,74 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
             </div>
           )}
 
+          {/* Live TV Timeshift timeline bar */}
+          {streamType === 'live' && settings.liveTimeshiftEnabled !== false && (
+            <div className="mb-3">
+              <div className="flex justify-between items-center text-xs mb-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-white/60 font-mono text-xs">
+                    {state.timeshiftOffset > 2 ? `-${formatTime(state.timeshiftOffset)}` : '0:00'}
+                  </span>
+                  {state.timeshiftOffset > 2 ? (
+                    <span className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 rounded-full animate-pulse">
+                      <Clock size={12} /> Timeshifted (-{formatTime(state.timeshiftOffset)})
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1.5 text-[11px] font-bold text-red-400 bg-red-500/15 border border-red-500/30 px-2.5 py-0.5 rounded-full">
+                      <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" /> Real-time Live
+                    </span>
+                  )}
+                  {state.cacheDuration > 0 && (
+                    <span className="text-white/40 text-[11px]">
+                      Buffer: {formatTime(state.cacheDuration)}
+                    </span>
+                  )}
+                </div>
+                {state.timeshiftOffset > 2 && (
+                  <button
+                    onClick={() => actions.jumpToLive()}
+                    className="flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white text-xs font-bold rounded-full shadow-lg transition-all transform hover:scale-105 active:scale-95"
+                    title="Jump to real-time live broadcast (Home or Shift+L)"
+                  >
+                    <RotateCcw size={12} className="rotate-180" /> Jump to LIVE
+                  </button>
+                )}
+              </div>
+              <div
+                className="relative h-2 bg-white/20 rounded-full cursor-pointer group-hover:h-3 transition-all duration-150"
+                onClick={(e) => {
+                  const bar = e.currentTarget.getBoundingClientRect();
+                  const pct = Math.max(0, Math.min(1, (e.clientX - bar.left) / bar.width));
+                  // pct = 1.0 means Live edge, pct < 1.0 means back in time
+                  if (pct >= 0.96) {
+                    actions.jumpToLive();
+                  } else {
+                    const maxSecs = Math.max(60, state.cacheDuration || 300);
+                    const targetBehind = (1 - pct) * maxSecs;
+                    actions.seekRelative(-targetBehind);
+                  }
+                }}
+                title="Click anywhere to timeshift back or forward"
+              >
+                {/* Buffer fill */}
+                <div
+                  className="absolute inset-y-0 left-0 bg-white/25 rounded-full"
+                  style={{ width: `${Math.min(100, Math.max(10, state.bufferingPercent || 100))}%` }}
+                />
+                {/* Active playback position marker */}
+                <div
+                  className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-cyan-400 border-2 border-white rounded-full shadow-lg transition-all"
+                  style={{
+                    left: `${state.timeshiftOffset > 2
+                      ? Math.max(5, Math.min(95, 100 - ((state.timeshiftOffset / Math.max(60, state.cacheDuration || 300)) * 100)))
+                      : 100}%`,
+                    transform: 'translate(-50%, -50%)',
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           {/* VOD seek bar */}
           {streamType === 'vod' && (
             <div className="mb-3 group">
@@ -538,6 +686,7 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
               <button
                 onClick={actions.togglePlayPause}
                 className="text-white hover:text-cyan-400 transition-colors p-2 rounded-lg hover:bg-white/10"
+                title={state.isPaused ? "Play (Space)" : "Pause (Space)"}
               >
                 {state.isPaused ? (
                   <Play className="w-6 h-6" />
@@ -546,20 +695,68 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
                 )}
               </button>
 
+              {/* VOD seek buttons */}
               {streamType === 'vod' && (
                 <>
                   <button
                     onClick={() => actions.seekRelative(-10)}
                     className="text-white/80 hover:text-white transition-colors px-2 py-1.5 rounded-lg hover:bg-white/10 text-xs flex items-center gap-0.5"
+                    title="Rewind 10s (←)"
                   >
                     <ChevronLeft className="w-3.5 h-3.5" />10s
                   </button>
                   <button
                     onClick={() => actions.seekRelative(10)}
                     className="text-white/80 hover:text-white transition-colors px-2 py-1.5 rounded-lg hover:bg-white/10 text-xs flex items-center gap-0.5"
+                    title="Forward 10s (→)"
                   >
                     10s<ChevronRight className="w-3.5 h-3.5" />
                   </button>
+                </>
+              )}
+
+              {/* Live TV Timeshift seek buttons */}
+              {streamType === 'live' && settings.liveTimeshiftEnabled !== false && (
+                <>
+                  <button
+                    onClick={() => actions.seekRelative(-60)}
+                    className="text-white/80 hover:text-white transition-colors px-2 py-1.5 rounded-lg hover:bg-white/10 text-xs flex items-center gap-0.5"
+                    title="Timeshift rewind 60s (Ctrl+Shift+←)"
+                  >
+                    <Rewind className="w-3.5 h-3.5" /> 60s
+                  </button>
+                  <button
+                    onClick={() => actions.seekRelative(-10)}
+                    className="text-white/80 hover:text-white transition-colors px-2 py-1.5 rounded-lg hover:bg-white/10 text-xs flex items-center gap-0.5"
+                    title="Timeshift rewind 10s (Ctrl+← or J)"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" /> 10s
+                  </button>
+                  {state.timeshiftOffset > 2 && (
+                    <>
+                      <button
+                        onClick={() => actions.seekRelative(10)}
+                        className="text-white/80 hover:text-white transition-colors px-2 py-1.5 rounded-lg hover:bg-white/10 text-xs flex items-center gap-0.5"
+                        title="Timeshift forward 10s (Ctrl+→ or L)"
+                      >
+                        10s <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => actions.seekRelative(60)}
+                        className="text-white/80 hover:text-white transition-colors px-2 py-1.5 rounded-lg hover:bg-white/10 text-xs flex items-center gap-0.5"
+                        title="Timeshift forward 60s (Ctrl+Shift+→)"
+                      >
+                        60s <FastForward className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => actions.jumpToLive()}
+                        className="text-red-400 hover:text-red-300 font-bold transition-colors px-2 py-1.5 rounded-lg hover:bg-red-500/10 text-xs flex items-center gap-1 border border-red-500/30"
+                        title="Jump directly to live broadcast edge (Home)"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 rotate-180" /> LIVE
+                      </button>
+                    </>
+                  )}
                 </>
               )}
 
@@ -711,21 +908,16 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
                 <Camera className="w-4 h-4" />
               </button>
 
-              {/* Record Button */}
-              {streamType === 'live' && activeChannel ? (
-                <RecordingButton
-                  channel={activeChannel}
-                  program={currentProgram}
-                  size="sm"
-                  variant="icon"
-                />
-              ) : streamType === 'vod' && streamUrl ? (
-                <RecordingButton
-                  vodSource={{ streamUrl, title: streamTitle }}
-                  size="sm"
-                  variant="icon"
-                />
-              ) : null}
+              {/* Record Button — Always enabled and instant 1-touch */}
+              <RecordingButton
+                streamUrl={streamUrl || undefined}
+                channelName={streamTitle || activeChannel?.name}
+                programTitle={currentProgram?.title || epgCurrentProgram?.title}
+                channel={activeChannel || undefined}
+                program={currentProgram}
+                size="sm"
+                variant="icon"
+              />
 
               {/* Stop */}
               <button
@@ -739,6 +931,81 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* ── Catch-up Drawer (Provider Timeshift Archive) ───────────────────── */}
+      {showCatchupDrawer && activeChannel && (
+        <div className="absolute inset-y-0 right-0 z-40 w-96 max-w-[90vw] bg-black/92 backdrop-blur-xl border-l border-white/10 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
+          <div className="p-4 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
+                <History className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-white text-sm font-bold">Provider Catch-up</h3>
+                <p className="text-white/40 text-[11px]">{activeChannel.name} • {activeChannel.tv_archive_duration || 7} Days Archive</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowCatchupDrawer(false)}
+              className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {loadingCatchup ? (
+              <div className="flex flex-col items-center justify-center py-16 text-white/40 text-xs gap-3">
+                <Loader2 className="w-7 h-7 animate-spin text-cyan-400" />
+                <span>Loading past broadcasts from provider...</span>
+              </div>
+            ) : catchupPrograms.length === 0 ? (
+              <div className="text-center py-16 text-white/40 text-xs px-4">
+                <Calendar className="w-10 h-10 mx-auto mb-3 text-white/20" />
+                <p className="text-white/60 font-medium mb-1">No Past EPG Listings Found</p>
+                <p className="text-white/30 text-[11px]">Provider has not published archive listings for this stream.</p>
+              </div>
+            ) : (
+              catchupPrograms.map((item, idx) => {
+                const startTs = item.start_timestamp ? Number(item.start_timestamp) * 1000 : new Date(item.start).getTime();
+                const stopTs = item.stop_timestamp ? Number(item.stop_timestamp) * 1000 : new Date(item.end).getTime();
+                const isPast = stopTs < Date.now();
+                return (
+                  <div
+                    key={item.id || idx}
+                    className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-cyan-400/40 hover:bg-white/[0.06] transition-all group"
+                  >
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="text-cyan-300 font-mono text-[11px] font-medium">
+                        {new Date(startTs).toLocaleDateString([], { month: 'short', day: 'numeric' })} • {new Date(startTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – {new Date(stopTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      {isPast && (
+                        <span className="text-[10px] bg-cyan-900/50 text-cyan-300 px-1.5 py-0.5 rounded font-bold uppercase">
+                          Archive
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-white text-sm font-semibold mb-1 group-hover:text-cyan-200 transition-colors">
+                      {item.title}
+                    </p>
+                    {item.description && (
+                      <p className="text-white/40 text-xs line-clamp-2 mb-2">
+                        {item.description}
+                      </p>
+                    )}
+                    <button
+                      onClick={() => playCatchupItem(item)}
+                      className="w-full mt-1.5 flex items-center justify-center gap-1.5 py-1.5 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-white text-xs font-bold rounded-lg shadow transition-all transform active:scale-98"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-white" /> Play Catch-up
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Buffering spinner (non-blocking) ──────────────────────────────── */}
       {state.isBuffering && !state.isLoading && (

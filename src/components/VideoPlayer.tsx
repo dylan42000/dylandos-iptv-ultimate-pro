@@ -106,7 +106,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const [showOsd, setShowOsd] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [subtitleTracks, setSubtitleTracks] = useState<{ id: number; label: string; language: string }[]>([]);
+  const [subtitleTracks, setSubtitleTracks] = useState<{ id: number; label: string; language: string; isCea?: boolean }[]>([]);
   const [activeSubtitleId, setActiveSubtitleId] = useState<number>(-1);
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
   const [audioTracks, setAudioTracks] = useState<{ id: number; label: string; language: string }[]>([]);
@@ -227,6 +227,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: streamType === 'live',
+          enableCEA708Captions: true,
           backBufferLength: streamType === 'live' ? buf.backBufferLength : 90,
           maxBufferLength: streamType === 'live' ? buf.maxBufferLength : 30,
           maxMaxBufferLength: streamType === 'live' ? buf.maxMaxBufferLength : 120,
@@ -588,27 +589,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video?.style.setProperty('--subtitle-outline', `${ow}px ${ow}px ${ow * 2}px rgba(0,0,0,0.8)`);
   }, [settings.subtitleFontSize, settings.subtitleFontColor, settings.subtitleOutlineWidth, settings.subtitleBackgroundOpacity]);
 
-  // ── Detect embedded subtitle tracks from HLS ──────────────────────────
+  // ── Detect embedded subtitle tracks & Closed Captions from HLS ──────────
 
   useEffect(() => {
     const hls = hlsRef.current;
     if (!hls) return;
 
     const handleSubtitleTracks = () => {
-      const tracks = hls.subtitleTracks.map((t, i) => ({
-        id: i,
-        label: t.name || t.lang || `Track ${i + 1}`,
-        language: t.lang || 'unknown',
-      }));
-      setSubtitleTracks(tracks);
+      const detected: { id: number; label: string; language: string; isCea?: boolean }[] = [];
+      
+      // 1. HLS WebVTT subtitle tracks
+      if (hls.subtitleTracks && hls.subtitleTracks.length > 0) {
+        hls.subtitleTracks.forEach((t, i) => {
+          detected.push({
+            id: i,
+            label: t.name || t.lang || `Track ${i + 1}`,
+            language: t.lang || 'unknown',
+            isCea: false,
+          });
+        });
+      }
+
+      // 2. Video element textTracks (CEA-608 / 708 / native VTT)
+      const video = videoRef.current;
+      if (video && video.textTracks) {
+        Array.from(video.textTracks).forEach((track, i) => {
+          if (track.kind === 'subtitles' || track.kind === 'captions') {
+            const trackLabel = track.label || (track.language ? `CC (${track.language.toUpperCase()})` : `Closed Caption ${i + 1}`);
+            const alreadyExists = detected.some(d => d.label.toLowerCase() === trackLabel.toLowerCase());
+            if (!alreadyExists) {
+              detected.push({
+                id: 1000 + i,
+                label: trackLabel,
+                language: track.language || 'unknown',
+                isCea: true,
+              });
+            }
+          }
+        });
+      }
+
+      setSubtitleTracks(detected);
     };
 
     hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, handleSubtitleTracks);
-    // Also check on manifest parsed since some streams expose tracks there
+    hls.on(Hls.Events.SUBTITLE_TRACK_LOADED, handleSubtitleTracks);
+    hls.on(Hls.Events.NON_NATIVE_TEXT_TRACKS_FOUND, handleSubtitleTracks);
     hls.on(Hls.Events.MANIFEST_PARSED, handleSubtitleTracks);
 
     return () => {
       hls.off(Hls.Events.SUBTITLE_TRACKS_UPDATED, handleSubtitleTracks);
+      hls.off(Hls.Events.SUBTITLE_TRACK_LOADED, handleSubtitleTracks);
+      hls.off(Hls.Events.NON_NATIVE_TEXT_TRACKS_FOUND, handleSubtitleTracks);
       hls.off(Hls.Events.MANIFEST_PARSED, handleSubtitleTracks);
     };
   }, [streamUrl]);
@@ -647,21 +679,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const checkTracks = () => {
       const textTracks = Array.from(video.textTracks);
       textTracks.forEach((t, i) => {
-        t.mode = i === activeSubtitleId && activeSubtitleId >= 0 ? 'showing' : 'disabled';
+        const isSelected = activeSubtitleId >= 1000 ? (activeSubtitleId - 1000 === i) : (activeSubtitleId === i);
+        t.mode = isSelected && activeSubtitleId >= 0 ? 'showing' : 'disabled';
       });
-      if (textTracks.length > 0 && subtitleTracks.length === 0) {
-        const tracks = textTracks.map((t, i) => ({
-          id: i,
-          label: t.label || t.language || `Track ${i + 1}`,
-          language: t.language || 'unknown',
-        }));
-        setSubtitleTracks(tracks);
+      if (textTracks.length > 0) {
+        setSubtitleTracks(prev => {
+          const current = [...prev];
+          textTracks.forEach((t, i) => {
+            if (t.kind === 'subtitles' || t.kind === 'captions') {
+              const label = t.label || (t.language ? `CC (${t.language.toUpperCase()})` : `Closed Caption ${i + 1}`);
+              if (!current.some(item => item.label.toLowerCase() === label.toLowerCase())) {
+                current.push({
+                  id: 1000 + i,
+                  label,
+                  language: t.language || 'unknown',
+                  isCea: true,
+                });
+              }
+            }
+          });
+          return current;
+        });
       }
     };
 
     video.textTracks.addEventListener('addtrack', checkTracks);
     return () => video.textTracks.removeEventListener('addtrack', checkTracks);
-  }, [streamUrl, subtitleTracks.length, activeSubtitleId]);
+  }, [streamUrl, activeSubtitleId]);
 
   // ── Toggle subtitle track ─────────────────────────────────────────────
 
@@ -669,17 +713,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const hls = hlsRef.current;
     const video = videoRef.current;
 
-    if (hls && hls.subtitleTracks.length > 0) {
-      hls.subtitleTrack = trackId;
-      hls.subtitleDisplay = trackId >= 0;
-    }
-
-    // Also handle native text tracks
-    if (video) {
-      const textTracks = Array.from(video.textTracks);
-      textTracks.forEach((t, i) => {
-        t.mode = i === trackId ? 'showing' : 'hidden';
-      });
+    if (trackId < 0) {
+      // Disabled
+      if (hls) {
+        hls.subtitleTrack = -1;
+        hls.subtitleDisplay = false;
+      }
+      if (video && video.textTracks) {
+        Array.from(video.textTracks).forEach(t => { t.mode = 'disabled'; });
+      }
+    } else if (trackId >= 1000) {
+      // Native text track / CEA-608
+      const nativeIdx = trackId - 1000;
+      if (hls) {
+        hls.subtitleTrack = -1;
+        hls.subtitleDisplay = false;
+      }
+      if (video && video.textTracks) {
+        Array.from(video.textTracks).forEach((t, i) => {
+          t.mode = i === nativeIdx ? 'showing' : 'disabled';
+        });
+      }
+    } else {
+      // HLS WebVTT subtitle track
+      if (hls && hls.subtitleTracks.length > 0) {
+        hls.subtitleTrack = trackId;
+        hls.subtitleDisplay = true;
+      }
+      if (video && video.textTracks) {
+        Array.from(video.textTracks).forEach(t => { t.mode = 'disabled'; });
+      }
     }
 
     setActiveSubtitleId(trackId);

@@ -32,7 +32,7 @@ class PlayerViewModel @Inject constructor(
     private val watchHistoryDao: WatchHistoryDao,
     private val vodResumeDao: VodResumeDao,
     private val epgProgramDao: EpgProgramDao,
-    val mpvWrapper: com.dylandos.iptv.ultimate.player.MpvPlayerWrapper,
+    val mpvWrapper: com.dylandos.iptv.ultimate.player.MpvPlayerWrapper
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PlayerUiState())
@@ -345,13 +345,17 @@ class PlayerViewModel @Inject constructor(
                 formatEpgWindow(now.startTimestamp, now.stopTimestamp)
             }
 
-            // Extract the next 3 programs
+            // Extract the next 5 programs and past 15 catch-up programs
             val nowIdx = epg?.indexOf(now) ?: -1
             val upcoming = if (epg != null && nowIdx >= 0 && nowIdx + 1 < epg.size) {
-                epg.subList(nowIdx + 1, epg.size).take(3)
+                epg.subList(nowIdx + 1, epg.size).take(5)
             } else {
                 emptyList()
             }
+            val catchupList = epg?.filter { it.stopTimestamp <= nowSec }
+                ?.sortedByDescending { it.startTimestamp }
+                ?.take(20)
+                .orEmpty()
 
             _uiState.value = _uiState.value.copy(
                 liveEpgTitle = now.title,
@@ -363,6 +367,7 @@ class PlayerViewModel @Inject constructor(
                     .firstOrNull { it.streamId == streamId }
                     ?.tvArchive == 1,
                 upcomingPrograms = upcoming,
+                catchupPrograms = catchupList,
                 neighborPeek = buildNeighborPeek(streamId, now.title)
             )
         }
@@ -622,6 +627,16 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    fun buildTimeShiftToken(streamId: Int, startMs: Long, endMs: Long): String {
+        val safeStartSec = (startMs / 1000L).coerceAtLeast(0L)
+        val durationMin = ((endMs - startMs) / 60_000L).coerceAtLeast(1L).toInt()
+        return "${streamId}_${safeStartSec}_${durationMin}"
+    }
+
+    fun setPendingPlaybackTitle(title: String) {
+        xtreamRepository.pendingStreamTitle = title
+    }
+
     override fun onCleared() {
         zapJob?.cancel()
         savePositionNow()
@@ -632,17 +647,11 @@ class PlayerViewModel @Inject constructor(
 
 private fun formatEpgWindow(startMs: Long, endMs: Long): String {
     if (startMs <= 0L || endMs <= 0L) return ""
-    return try {
-        val fmt = java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.getDefault()).apply {
-            timeZone = java.util.TimeZone.getDefault()
-        }
-        val endFmt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).apply {
-            timeZone = java.util.TimeZone.getDefault()
-        }
-        val t0 = java.util.Date(startMs * 1000L)
-        val t1 = java.util.Date(endMs * 1000L)
-        "${fmt.format(t0)} · ${endFmt.format(t1)}"
-    } catch (_: Exception) { "" }
+    return runCatching {
+        val startStr = com.dylandos.iptv.ultimate.ui.util.TimeFormatter.formatWindowLabel(startMs * 1000L)
+        val endStr = com.dylandos.iptv.ultimate.ui.util.TimeFormatter.formatShortTime(endMs * 1000L)
+        "$startStr · $endStr"
+    }.getOrDefault("")
 }
 
 private data class SeriesEpisodeContext(
@@ -690,6 +699,7 @@ data class PlayerUiState(
     val isCatchupPlayback: Boolean = false,
     val catchupResumePositionMs: Long = 0L,
     val upcomingPrograms: List<com.dylandos.iptv.ultimate.data.model.XtreamEpgProgram> = emptyList(),
+    val catchupPrograms: List<com.dylandos.iptv.ultimate.data.model.XtreamEpgProgram> = emptyList(),
     val neighborPeek: List<LiveNeighborPeek> = emptyList(),
     val currentPositionMs: Long = 0L,
     val durationMs: Long = 0L,

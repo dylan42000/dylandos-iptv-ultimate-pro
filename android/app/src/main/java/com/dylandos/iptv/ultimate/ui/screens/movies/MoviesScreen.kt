@@ -47,6 +47,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import coil.request.CachePolicy
@@ -133,30 +136,66 @@ fun MoviesScreen(
     var pendingGridFocusMove by remember { mutableStateOf(false) }
     var moveFocusAfterCategoryLoad by remember { mutableStateOf(false) }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var shouldRestoreFocusOnResume by remember { mutableStateOf(false) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                shouldRestoreFocusOnResume = true
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     LaunchedEffect(Unit) {
         viewModel.loadIfNeeded()
         viewModel.refreshResume()   // re-check positions when returning from player
     }
 
-    // Focus the category rail ONE TIME when categories first become available.
-    // Subsequent data reloads (cache refresh, category switch) do NOT re-focus.
-    LaunchedEffect(uiState.categories.isNotEmpty(), uiState.itemCount, initialFocusDone) {
-        if (uiState.categories.isNotEmpty() && !initialFocusDone) {
-            initialFocusDone = true
-            kotlinx.coroutines.delay(120)
-            val maxIdx = (uiState.itemCount - 1).coerceAtLeast(0)
-            val restoredIndex = (uiState.focusedRow * POSTER_COLS + uiState.focusedCol)
-                .coerceIn(0, maxIdx)
-            val shouldRestoreGrid =
-                uiState.itemCount > 0 &&
-                (uiState.gridFirstVisibleItemIndex > 0 || restoredIndex > 0 || uiState.selectedCategoryId != "ALL")
+    // Focus restoration on initial load AND on resume from details/player
+    LaunchedEffect(
+        uiState.categories.isNotEmpty(),
+        uiState.itemCount,
+        lazyMovies.itemCount,
+        shouldRestoreFocusOnResume,
+        initialFocusDone
+    ) {
+        val needsInitial = uiState.categories.isNotEmpty() && uiState.itemCount > 0 && lazyMovies.itemCount > 0 && !initialFocusDone
+        val needsResume = shouldRestoreFocusOnResume && uiState.itemCount > 0 && lazyMovies.itemCount > 0
 
-            if (shouldRestoreGrid) {
-                runCatching { posterGridState.scrollToItem(restoredIndex) }
-                runCatching { gridEntryFR.requestFocus() }
-            } else {
-                runCatching { categoryFR.requestFocus() }
+        if (!needsInitial && !needsResume) return@LaunchedEffect
+
+        if (needsInitial) initialFocusDone = true
+        if (needsResume) shouldRestoreFocusOnResume = false
+
+        val maxIdx = (uiState.itemCount - 1).coerceAtLeast(0)
+        val restoredIndex = (uiState.focusedRow * POSTER_COLS + uiState.focusedCol).coerceIn(0, maxIdx)
+        val shouldRestoreGrid = uiState.itemCount > 0 &&
+            (uiState.gridFirstVisibleItemIndex > 0 || restoredIndex > 0 || uiState.selectedCategoryId != "ALL" || needsResume)
+
+        if (shouldRestoreGrid) {
+            runCatching { posterGridState.scrollToItem(restoredIndex) }
+            delay(48)
+            runCatching { firstPosterBringIntoView.bringIntoView() }
+            val deadline = System.nanoTime() + 2_500_000_000L
+            while (System.nanoTime() < deadline) {
+                withFrameNanos { }
+                runCatching { firstPosterBringIntoView.bringIntoView() }
+                val focused = try {
+                    when (val result: Any = gridEntryFR.requestFocus()) {
+                        is Boolean -> result
+                        else -> true
+                    }
+                } catch (_: Throwable) {
+                    false
+                }
+                if (focused) break
+                delay(48)
             }
+        } else {
+            runCatching { categoryFR.requestFocus() }
         }
     }
 
@@ -422,7 +461,10 @@ fun MoviesScreen(
                                 .coerceIn(0, (uiState.itemCount - 1).coerceAtLeast(0)),
                             categoryFR = categoryFR,
                             onItemFocused = { row, col -> viewModel.setFocus(row, col) },
-                            onItemSelected = { movie -> viewModel.showDetail(movie) },
+                            onItemSelected = { movie, row, col ->
+                                viewModel.setFocus(row, col)
+                                viewModel.showDetail(movie)
+                            },
                             onToggleFavorite = { movie -> viewModel.toggleMovieFavorite(movie.streamId) },
                             modifier = Modifier
                                 .fillMaxHeight()
@@ -758,7 +800,7 @@ private fun MoviePosterGrid(
     entryItemIndex: Int,
     categoryFR: FocusRequester,     // used by LEFT-edge cards to return to category rail
     onItemFocused: (row: Int, col: Int) -> Unit,
-    onItemSelected: (XtreamMovie) -> Unit,
+    onItemSelected: (XtreamMovie, Int, Int) -> Unit,
     onToggleFavorite: (XtreamMovie) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -790,7 +832,7 @@ private fun MoviePosterGrid(
                 focusRequester = if (index == entryItemIndex) entryItemFR else null,
                 bringIntoViewRequester = if (index == entryItemIndex) entryBringIntoView else null,
                 onFocused = { onItemFocused(row, col) },
-                onSelected = { onItemSelected(movie) },
+                onSelected = { onItemSelected(movie, row, col) },
                 onToggleFavorite = { onToggleFavorite(movie) },
                 onLeftEdge = { try { categoryFR.requestFocus() } catch (_: Exception) {} }
             )

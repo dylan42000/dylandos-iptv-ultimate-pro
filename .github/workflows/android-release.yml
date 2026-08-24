@@ -113,7 +113,7 @@ jobs:
         working-directory: apks
         env:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-          GIST_ID: 6056e65b41641393abf585cecbd92d07
+          GIST_ID: c3eda014bd60ef939da246f1896066e4
           RELEASE_TAG: ${{ github.ref_name }}
           VERSION: ${{ steps.version.outputs.tag }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}

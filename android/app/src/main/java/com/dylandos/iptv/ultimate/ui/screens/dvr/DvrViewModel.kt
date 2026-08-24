@@ -79,6 +79,7 @@ data class DvrRecording(
     val channelName: String,
     val channelId: Int,
     val streamUrl: String,
+    val programTitle: String = "",
     val startTimeMs: Long = System.currentTimeMillis(),
     val stopTimeMs: Long? = null,
     val filePath: String = "",
@@ -497,7 +498,12 @@ class DvrViewModel @Inject constructor(
         dvrRepo.updateFileSizeBytes(recordingId, bytes)
     }
 
-    fun recordLiveChannel(channelName: String, streamId: Int, accountId: String? = null) {
+    fun recordLiveChannel(
+        channelName: String,
+        streamId: Int,
+        accountId: String? = null,
+        programTitle: String? = null
+    ) {
         if (!xtreamRepository.isConnected) {
             _uiState.value = _uiState.value.copy(statusMessage = "Not connected — cannot record")
             return
@@ -517,8 +523,66 @@ class DvrViewModel @Inject constructor(
                 ?.removePrefix("http://")
                 ?.substringBefore(":")
                 ?.substringBefore("/")
-                ?.takeIf { it.isNotBlank() }
+                ?.takeIf { it.isNotBlank() },
+            programTitle = programTitle
         )
+    }
+
+    fun recordLiveChannelForDuration(
+        channelName: String,
+        streamId: Int,
+        durationMinutes: Int,
+        accountId: String? = null,
+        programTitle: String? = null
+    ) {
+        val nowMs = System.currentTimeMillis()
+        val endMs = nowMs + durationMinutes * 60_000L
+        val selectedAccount = resolveRecordingAccount(accountId)
+        val url = if (selectedAccount != null) {
+            buildLiveStreamUrlForAccount(selectedAccount, streamId)
+        } else {
+            xtreamRepository.getLiveStreamUrl(streamId, "ts")
+        }
+        val providerHost = (selectedAccount?.serverUrl ?: xtreamRepository.serverUrl)
+            .removePrefix("https://").removePrefix("http://")
+            .substringBefore(":").substringBefore("/")
+            .takeIf { it.isNotBlank() }
+
+        val rec = DvrRecording(
+            channelName = channelName,
+            channelId = streamId,
+            streamUrl = url,
+            programTitle = programTitle ?: "Live Recording (${durationMinutes}m)",
+            startTimeMs = nowMs,
+            isActive = true
+        )
+        dvrRepo.addRecording(rec)
+
+        val intent = Intent(context, com.dylandos.iptv.ultimate.service.RecordingService::class.java).apply {
+            action = com.dylandos.iptv.ultimate.service.RecordingService.ACTION_START
+            putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_CHANNEL_NAME, channelName)
+            putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_STREAM_URL, url)
+            putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_RECORDING_ID, rec.id)
+            putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_STOP_AT_MS, endMs)
+            _uiState.value.storagePath?.let { path ->
+                putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_STORAGE_URI, path)
+            }
+            if (providerHost != null) {
+                putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_PROVIDER_NAME, providerHost)
+            }
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            _uiState.value = _uiState.value.copy(
+                statusMessage = "Recording $channelName for ${durationMinutes} min"
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to start timed recording")
+        }
     }
 
     private fun resolveRecordingAccount(accountId: String?): SavedAccount? {
@@ -529,7 +593,19 @@ class DvrViewModel @Inject constructor(
             if (match != null) return match
         }
         val activeId = _uiState.value.activeRecordingAccountId
-        return accounts.firstOrNull { it.id == activeId } ?: accounts.firstOrNull()
+        if (activeId.isNotBlank()) {
+            val dedicated = accounts.firstOrNull { it.id == activeId }
+            if (dedicated != null) return dedicated
+        }
+        if (accounts.size > 1) {
+            val currentPlaybackAccount = accounts.firstOrNull { it.username == xtreamRepository.username }
+            val alternate = accounts.firstOrNull { it.id != currentPlaybackAccount?.id }
+            if (alternate != null) {
+                Timber.i("DVR: Dual-account auto routing: recording on '${alternate.nickname}' while watching on '${currentPlaybackAccount?.nickname ?: "primary"}'")
+                return alternate
+            }
+        }
+        return accounts.firstOrNull()
     }
 
     private fun buildLiveStreamUrlForAccount(account: SavedAccount, streamId: Int): String {
@@ -541,7 +617,8 @@ class DvrViewModel @Inject constructor(
         channelName: String,
         channelId: Int,
         streamUrl: String,
-        providerName: String? = null
+        providerName: String? = null,
+        programTitle: String? = null
     ): String {
         dvrRepo.getActiveRecordings()
             .firstOrNull { PlayerRecordingBridge.urlsMatch(it.streamUrl, streamUrl) }
@@ -560,7 +637,8 @@ class DvrViewModel @Inject constructor(
         val rec = DvrRecording(
             channelName = channelName,
             channelId = channelId,
-            streamUrl = streamUrl
+            streamUrl = streamUrl,
+            programTitle = programTitle.orEmpty()
         )
         dvrRepo.addRecording(rec)
 
@@ -569,6 +647,9 @@ class DvrViewModel @Inject constructor(
             putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_RECORDING_ID, rec.id)
             putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_STREAM_URL, streamUrl)
             putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_CHANNEL_NAME, channelName)
+            if (!programTitle.isNullOrBlank()) {
+                putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_PROGRAM_TITLE, programTitle)
+            }
             _uiState.value.storagePath?.let { path ->
                 putExtra(com.dylandos.iptv.ultimate.service.RecordingService.EXTRA_STORAGE_URI, path)
             }

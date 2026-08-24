@@ -65,9 +65,15 @@ export interface AppSettings {
   mpvLogLevel: 'no' | 'error' | 'warn' | 'info' | 'debug';
 
   // ── DVR ──
+  dvrOutputDir?: string;
   dvrFormat: 'mkv' | 'mp4' | 'ts';
   dvrPreBufferSecs: number;     // seconds to record before scheduled start
   dvrPostBufferSecs: number;    // seconds to record after scheduled end
+  dvrMaxConcurrent?: number;    // 1 to 5 concurrent recordings
+
+  // ── Timeshift ──
+  liveTimeshiftBufferSize?: 'standard' | 'large' | 'max' | 'ultra';
+  liveUserAgent?: string;
 
   // ── Playlists ──
   playlistRefreshHours: number; // 0 = manual, 6 | 12 | 24
@@ -150,9 +156,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mpvScreenshotDir: '',
   mpvLogLevel: 'error',
   // DVR defaults
+  dvrOutputDir: '',
   dvrFormat: 'ts',
   dvrPreBufferSecs: 120,
   dvrPostBufferSecs: 120,
+  dvrMaxConcurrent: 3,
+  // Timeshift defaults
+  liveTimeshiftBufferSize: 'large',
+  liveUserAgent: 'IPTVSmartersPro',
   // Playlist refresh
   playlistRefreshHours: 24,
   // Parental
