@@ -1,0 +1,24 @@
+{
+  "versionCode": 95,
+  "version": "5.2.4",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "IMPROVED: Replay is faster and more reliable with request cancellation, caching, and fallback programme loading.",
+    "IMPROVED: Replay now shows full dates, times, and provider programme descriptions when available.",
+    "NEW: Optional MPV-first playback for VOD, Series, and Replay with LibVLC/Media3 fallback.",
+    "IMPROVED: US / USA / NA / English channels and categories are prioritized automatically."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_SIGNED_FIRESTICK_APK_DIRECT_URL",
+      "apkSize": 70855236,
+      "sha256": "00C58B06223C5FC38F5B28651A4CE164E58F0572870720A5DA8F44A8E1564745"
+    },
+    "premium": {
+      "apkUrl": "REPLACE_WITH_SIGNED_ANDROID_APK_DIRECT_URL",
+      "apkSize": 71893940,
+      "sha256": "311026F5C0F33D53D2283F44C104F4ED4240628F066B55A493475D63B4A65524"
+    }
+  }
+}

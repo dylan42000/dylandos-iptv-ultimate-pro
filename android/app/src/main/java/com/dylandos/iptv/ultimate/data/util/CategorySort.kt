@@ -9,8 +9,8 @@ import com.dylandos.iptv.ultimate.data.model.XtreamCategory
  * promoted to the front of the list so American / English content is always
  * the first thing users see in Live TV, Movies, Series, and the Guide.
  *
- * Deliberately NOT matching bare "NA" because it would falsely match names
- * like "NBA", "Canal+", "NAT GEO", etc.
+ * "NA" is accepted only as a complete token, so it does not promote names
+ * such as "NBA" or "NAT GEO".
  */
 private val US_EN_TOKENS = listOf(
     "US",
@@ -23,6 +23,7 @@ private val US_EN_TOKENS = listOf(
     "ENG",
     "ENGLISH",
     "N.A.",
+    "NA",
     "NORTH AMERICA",
     "NORTH AMERICAN"
 )
@@ -32,9 +33,12 @@ private val US_EN_TOKEN_PATTERN = Regex("(^|[^A-Z0-9])(${US_EN_TOKENS.joinToStri
 
 /** Returns `true` when a category should be sorted to the top. */
 fun XtreamCategory.isUsEnPriority(): Boolean {
-    val upper = categoryName.uppercase()
-    return US_EN_TOKEN_PATTERN.containsMatchIn(upper)
+    return isUsEnPriorityLabel(categoryName)
 }
+
+/** Same lightweight priority rule for channel names, including Replay channel lists. */
+fun isUsEnPriorityLabel(label: String): Boolean =
+    US_EN_TOKEN_PATTERN.containsMatchIn(label.uppercase())
 
 /**
  * Sorts a category list so US/English/NA entries come first (preserving

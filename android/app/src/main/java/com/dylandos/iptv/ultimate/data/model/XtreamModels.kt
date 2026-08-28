@@ -389,5 +389,13 @@ data class XtreamEpgProgram(
     @field:JsonAdapter(FlexibleLongAdapter::class)
     @SerializedName("stop_timestamp") val stopTimestamp: Long = 0L,
     @SerializedName("now_playing") val nowPlaying: Int = 0,
-    @SerializedName("has_archive") val hasArchive: Int = 0
+    @SerializedName("has_archive") val hasArchive: Int = 0,
+    /**
+     * Original provider EPG values retained only in memory for Replay URL construction.
+     * The visible [startTimestamp]/[stopTimestamp] may be corrected to make the guide
+     * match real time; providers can still index archive files using their original clock.
+     */
+    @Transient val archiveStartTimestamp: Long = 0L,
+    @Transient val archiveStopTimestamp: Long = 0L,
+    @Transient val archiveStartWallClock: String? = null
 )

@@ -13,6 +13,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -40,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -56,6 +58,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.CaptionStyleCompat
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.navigation.NavController
 import com.dylandos.iptv.ultimate.BuildConfig
@@ -491,10 +494,11 @@ fun PlayerScreen(
     val isLive = streamType == "live"
     val isDvr  = streamType == "dvr"
     // Engine policy:
-    // - VOD/Series: MPV → LibVLC → Media3
+    // - VOD/Series/Provider Replay: optional MPV → LibVLC → Media3
     // - Live/DVR: LibVLC → Media3 (USB timeshift live = Media3 only)
     val isVodOrSeries = streamType == "vod" || streamType == "series"
-    val preferMpvVod = false // Disabled MPV in favor of LibVLC per user request
+    val isMpvEligible = isVodOrSeries || streamType == "timeshift"
+    val preferMpvVod = settingsState.preferMpvPlayback && isMpvEligible
     val preferMedia3Live = settingsState.timeshiftEnabled && isLive
     val preferMedia3Playback = preferMedia3Live
     // ── v5.0 Adaptive Buffer Controller ─────────────────────────────────────────
@@ -1059,6 +1063,12 @@ fun PlayerScreen(
                     // Never start LibVLC while the USB timeshift pipeline owns the
                     // live stream. A mixed-engine handoff is what creates dual audio.
                     vlcInitError = "USB timeshift playback failed: ${error.errorCodeName}. Disable Timeshift to retry normal live TV."
+                } else if (uiState.isCatchupPlayback && viewModel.retryCatchupWithNextUrl()) {
+                    // Provider Replay has multiple endpoint/container candidates. Restart
+                    // from LibVLC for each one, then allow the normal Media3 fallback.
+                    useExoFallback = false
+                    libVlcFailedForCurrentStream = false
+                    Timber.w("Media3 Replay failure; advancing to next provider URL")
                 } else if (isLive && autoRecoveryAttempts < 8) {
                     useExoFallback = false
                     autoRecoveryAttempts++
@@ -1400,10 +1410,16 @@ fun PlayerScreen(
                     Timber.e("LibVLC error [$streamType]")
                     if (isLive) {
                         val playedRecently = System.currentTimeMillis() - lastLibVlcPlayingAtMs < 15_000L
-                        if (playedRecently) {
-                            Timber.w("Ignoring transient LibVLC live error after playback started; avoiding duplicate audio reload")
+                        if (playedRecently && autoRecoveryAttempts < 3) {
+                            // A live stream can raise EncounteredError after it has been
+                            // healthy (stale manifest, dropped TS connection). The prior
+                            // code ignored that signal and left a frozen/blank surface.
+                            // Retry the same engine first so a transient outage does not
+                            // consume another provider connection; escalate after 3 tries.
+                            autoRecoveryAttempts++
+                            Timber.w("LibVLC live error after playback; scheduling recovery $autoRecoveryAttempts/3")
                         } else {
-                            Timber.w("LibVLC live failed before stable playback; switching to Media3 fallback")
+                            Timber.w("LibVLC live recovery exhausted or failed at startup; switching to Media3 fallback")
                             libVlcFailedForCurrentStream = true
                             runCatching {
                                 mediaPlayer?.stop()
@@ -1411,6 +1427,15 @@ fun PlayerScreen(
                             }
                             useExoFallback = true
                         }
+                    } else if (uiState.isCatchupPlayback && !libVlcFailedForCurrentStream) {
+                        // A number of providers expose archive HLS/TS variants that LibVLC
+                        // rejects but Media3 can parse.  Exhaust both engines for the same
+                        // URL before changing the provider time/container candidate.
+                        failoverVlcToMedia3("Replay URL rejected by LibVLC")
+                    } else if (uiState.isCatchupPlayback && viewModel.retryCatchupWithNextUrl()) {
+                        useExoFallback = false
+                        libVlcFailedForCurrentStream = false
+                        Timber.w("LibVLC + Media3 Replay failure; advancing to next provider URL")
                     } else if (isDvr) {
                         libVlcFailedForCurrentStream = true
                         Timber.w("DVR LibVLC playback failed; switching to Media3 local-file last resort")
@@ -1568,7 +1593,9 @@ fun PlayerScreen(
     // server hiccups before Media3 is considered.
     // 1500ms matches LibVLC surface teardown settle time on Firestick 4K.
     LaunchedEffect(autoRecoveryAttempts) {
-        if (isLive) return@LaunchedEffect
+        // This recovery path is for normal live TV. USB timeshift is Media3-owned;
+        // mixing engines there can produce duplicate audio and corrupt its ring buffer.
+        if (!isLive || useExoFallback || liveTimeshiftEnabled) return@LaunchedEffect
         if (autoRecoveryAttempts in 1..3) {
             val requestToken = streamLoadToken
             val mp     = mediaPlayer ?: return@LaunchedEffect
@@ -2367,11 +2394,19 @@ fun PlayerScreen(
                                 onClick = {
                                     vlcInitError = null
                                     autoRecoveryAttempts = 0
-                                    // Force recompose of the playback LaunchedEffect by re-triggering
-                                    viewModel.retryStream()
+                                    useMpvPrimary = preferMpvVod
+                                    useExoFallback = false
+                                    libVlcFailedForCurrentStream = false
+                                    // Replay retries the complete provider URL + engine ladder;
+                                    // other stream types simply restart their current URL.
+                                    if (uiState.isCatchupPlayback) {
+                                        viewModel.restartCatchupRecovery()
+                                    } else {
+                                        viewModel.retryStream()
+                                    }
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = AccentSecondary)
-                            ) { Text("Retry") }
+                            ) { Text(if (uiState.isCatchupPlayback) "Retry Replay" else "Retry") }
                             Button(
                                 onClick = { navController.popBackStackSafeDebounced() },
                                 colors = ButtonDefaults.buttonColors(containerColor = Accent)
@@ -2392,6 +2427,9 @@ fun PlayerScreen(
                         factory = { ctx ->
                             PlayerView(ctx).apply {
                                 useController = false
+                                // Android phones must preserve the source frame rather than
+                                // stretching video to fill a tall portrait viewport.
+                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                                 isFocusable = false
                                 isFocusableInTouchMode = false
                                 descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
@@ -2423,6 +2461,38 @@ fun PlayerScreen(
                         modifier = Modifier.fillMaxSize()
                     )
                 }
+
+                // Premium/phone controls: a tap exposes the same control HUD that the
+                // Fire TV remote opens; double-tap skips, long-press cycles aspect.
+                // Kept below the HUD so visible buttons retain their normal touch actions.
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .pointerInput(isLive, configuredSkipMs) {
+                            detectTapGestures(
+                                onTap = {
+                                    showControls = !showControls
+                                    controlsInteractionTick++
+                                },
+                                onDoubleTap = { offset ->
+                                    showControls = true
+                                    controlsInteractionTick++
+                                    if (offset.x < size.width / 2f) {
+                                        if (isLive) rewindLiveOrCatchup() else seekActivePlayer(-configuredSkipMs)
+                                    } else {
+                                        if (isLive) fastForwardLiveOrCatchup() else seekActivePlayer(configuredSkipMs)
+                                    }
+                                },
+                                onLongPress = {
+                                    aspectIndex = (aspectIndex + 1) % aspectRatioOptions.size
+                                    val ratio = aspectRatioOptions[aspectIndex]
+                                    runCatching { mediaPlayer?.aspectRatio = ratio }
+                                    aspectOsdVisible = true
+                                    showControls = true
+                                }
+                            )
+                        }
+                )
 
                 // ── Premium Zap OSD (Mini-EPG) ────────────────────────────────
                 // High-end live zapping / channel info (bottom-third) — EPG from short EPG
@@ -2684,7 +2754,7 @@ fun PlayerScreen(
                                 controlsInteractionTick++
                                 when (idx) {
                                     0 -> {
-                                        if (isLive && !uiState.isCatchupPlayback && (uiState.canRestartCurrentProgram || uiState.catchupPrograms.isNotEmpty())) {
+                                        if (settingsState.providerReplayEnabled && isLive && !uiState.isCatchupPlayback && (uiState.canRestartCurrentProgram || uiState.catchupPrograms.isNotEmpty())) {
                                             showCatchupSheet = true
                                         } else if (isLive) {
                                             rewindLiveOrCatchup()

@@ -17,6 +17,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dylandos.iptv.ultimate.data.model.UpdateInfo
 import com.dylandos.iptv.ultimate.data.network.UpdateChecker
+import com.dylandos.iptv.ultimate.BuildConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +49,7 @@ import javax.inject.Inject
 sealed interface UpdateState {
     object Idle       : UpdateState
     object Checking   : UpdateState
+    data class UpToDate(val localVersionCode: Int) : UpdateState
     data class Available(val info: UpdateInfo) : UpdateState
     data class Downloading(val info: UpdateInfo, val progressPct: Int) : UpdateState
     data class ReadyToInstall(val info: UpdateInfo, val localUri: Uri) : UpdateState
@@ -87,7 +89,7 @@ class UpdateViewModel @Inject constructor(
             _state.value = if (info != null) {
                 UpdateState.Available(info)
             } else {
-                UpdateState.Idle
+                UpdateState.UpToDate(BuildConfig.VERSION_CODE)
             }
         }
     }

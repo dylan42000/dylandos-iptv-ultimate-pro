@@ -19,6 +19,7 @@ import com.dylandos.iptv.ultimate.ui.theme.AppTheme
 import com.dylandos.iptv.ultimate.ui.theme.appThemeFromName
 import com.dylandos.iptv.ultimate.data.filter.ContentFilterRepository
 import com.dylandos.iptv.ultimate.data.filter.FilterSettings
+import com.dylandos.iptv.ultimate.ui.util.TimeFormatter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -72,6 +73,8 @@ data class SettingsUiState(
     val epgThirdPartyEnabled: Boolean = true,
     val epgThirdPartyUrl: String = EpgSourceDefaults.DEFAULT_URL_BLOCK,
     val epgTimeOffsetHours: Int = 0,
+    /** Render-only zone; does not modify UTC programme timestamps. */
+    val epgDisplayTimeZone: String = "America/Denver",
 
     // Appearance
     val appTheme: AppTheme = AppTheme.NEON_PARADISE,
@@ -122,8 +125,10 @@ data class SettingsUiState(
     val dvrDefaultQuality: String = "Original",    // "Original" | "720p" | "480p"
     /** SAF/OTG tree URI string — shared with DvrViewModel via the same DataStore key. */
     val dvrStoragePath: String? = null,
-    /** Enables provider catch-up plus LibVLC/Media3 local live pause and rewind buffering. */
+    /** Enables the local disk-backed live pause / rewind buffer only. */
     val timeshiftEnabled: Boolean = false,
+    /** Enables provider-hosted historical programmes in the dedicated Replay tab. */
+    val providerReplayEnabled: Boolean = true,
 
     // ── v5.0 Adaptive Buffer + Timeshift window ────────────────────────────────
     /** Adaptive live buffer: controller raises/lowers --network-caching automatically. */
@@ -185,6 +190,8 @@ data class SettingsUiState(
     val vlcNetworkMtu: Int = 0,
     /** Enable LibVLC verbose debug logging in logcat */
     val vlcVerboseLog: Boolean = false,
+    /** Prefer MPV for VOD, Series, and provider Replay; safely falls back to LibVLC then Media3. */
+    val preferMpvPlayback: Boolean = false,
 
 
     // ── Player Experience Customization ───────────────────────────────────────
@@ -252,6 +259,7 @@ class SettingsViewModel @Inject constructor(
         val KEY_EPG_TIME_OFFSET      = intPreferencesKey("epg_time_offset_hours")
         val KEY_EPG_HOURS_TO_SHOW    = intPreferencesKey("epg_hours_to_show")
         val KEY_EPG_TIME_FORMAT      = stringPreferencesKey("epg_time_format")
+        val KEY_EPG_DISPLAY_TIME_ZONE = stringPreferencesKey("epg_display_time_zone")
         val KEY_EPG_DESCRIPTIONS     = booleanPreferencesKey("epg_show_descriptions")
         val KEY_EPG_COMPACT          = booleanPreferencesKey("epg_compact_mode")
         val KEY_EPG_THIRD_PARTY_ENABLED = booleanPreferencesKey("epg_third_party_enabled")
@@ -303,6 +311,7 @@ class SettingsViewModel @Inject constructor(
         /** Shared with DvrViewModel — same DataStore key "dvr_storage_path" */
         val KEY_DVR_STORAGE_PATH   = stringPreferencesKey("dvr_storage_path")
         val KEY_TIMESHIFT_ENABLED  = booleanPreferencesKey("timeshift_enabled_v2")
+        val KEY_PROVIDER_REPLAY_ENABLED = booleanPreferencesKey("provider_replay_enabled_v1")
         // v5.0 adaptive buffer + timeshift window
         val KEY_ADAPTIVE_BUFFER    = booleanPreferencesKey("adaptive_buffer_v2")
         val KEY_BUFFER_FLOOR_MS    = intPreferencesKey("buffer_floor_ms")
@@ -340,6 +349,7 @@ class SettingsViewModel @Inject constructor(
         val KEY_VLC_CLOCK_JITTER_MS   = intPreferencesKey("vlc_clock_jitter_ms")
         val KEY_VLC_NETWORK_MTU       = intPreferencesKey("vlc_network_mtu")
         val KEY_VLC_VERBOSE_LOG       = booleanPreferencesKey("vlc_verbose_log")
+        val KEY_PREFER_MPV_PLAYBACK   = booleanPreferencesKey("prefer_mpv_playback")
         // Player Experience
         val KEY_SKIP_INTERVAL          = intPreferencesKey("skip_interval_seconds")
         val KEY_CONTROLS_AUTOHIDE      = intPreferencesKey("controls_auto_hide_seconds")
@@ -400,6 +410,9 @@ class SettingsViewModel @Inject constructor(
             epgTimeOffsetHours     = prefs[KEY_EPG_TIME_OFFSET]      ?: 0,
             epgHoursToShow         = prefs[KEY_EPG_HOURS_TO_SHOW]    ?: 4,
             epgTimeFormat          = prefs[KEY_EPG_TIME_FORMAT]       ?: "24h",
+            // This Fire TV product is configured for the owner's Mountain-time location.
+            // Users with a correctly configured device can select "Fire TV" in Settings.
+            epgDisplayTimeZone     = prefs[KEY_EPG_DISPLAY_TIME_ZONE] ?: "America/Denver",
             epgShowDescriptions    = prefs[KEY_EPG_DESCRIPTIONS]     ?: true,
             epgCompactMode         = prefs[KEY_EPG_COMPACT]          ?: false,
             epgThirdPartyEnabled   = prefs[KEY_EPG_THIRD_PARTY_ENABLED] ?: true,
@@ -449,6 +462,7 @@ class SettingsViewModel @Inject constructor(
             dvrDefaultQuality      = prefs[KEY_DVR_DEFAULT_QUALITY]   ?: "Original",
             dvrStoragePath         = prefs[KEY_DVR_STORAGE_PATH],
             timeshiftEnabled       = prefs[KEY_TIMESHIFT_ENABLED]     ?: false,
+            providerReplayEnabled  = prefs[KEY_PROVIDER_REPLAY_ENABLED] ?: true,
             adaptiveBuffer         = prefs[KEY_ADAPTIVE_BUFFER]       ?: true,
             bufferFloorMs          = (prefs[KEY_BUFFER_FLOOR_MS]      ?: 600).coerceIn(300, 2_000),
             bufferCeilingMs        = (prefs[KEY_BUFFER_CEILING_MS]    ?: 4000).coerceIn(600, 8_000),
@@ -485,6 +499,7 @@ class SettingsViewModel @Inject constructor(
             vlcClockJitterMs       = prefs[KEY_VLC_CLOCK_JITTER_MS]   ?: 0,
             vlcNetworkMtu          = prefs[KEY_VLC_NETWORK_MTU]       ?: 0,
             vlcVerboseLog          = prefs[KEY_VLC_VERBOSE_LOG]       ?: false,
+            preferMpvPlayback      = prefs[KEY_PREFER_MPV_PLAYBACK]   ?: false,
             // Player Experience
             skipIntervalSeconds        = prefs[KEY_SKIP_INTERVAL]          ?: 10,
             controlsAutoHideSeconds    = prefs[KEY_CONTROLS_AUTOHIDE]      ?: 5,
@@ -499,6 +514,7 @@ class SettingsViewModel @Inject constructor(
             defaultRecordingDurationMin= prefs[KEY_DEFAULT_REC_DURATION]   ?: 60,
             recordInBackground         = prefs[KEY_RECORD_IN_BACKGROUND]   ?: true
         )
+        TimeFormatter.setDisplayTimeZone(_state.value.epgDisplayTimeZone)
         xtreamRepository.importHiddenCategoriesIfEmpty(
             CategoryContentType.LIVE,
             prefs[KEY_HIDDEN_LIVE_CATS] ?: emptySet()
@@ -770,6 +786,12 @@ class SettingsViewModel @Inject constructor(
         save { it[KEY_EPG_TIME_FORMAT] = v }
         _state.value = _state.value.copy(epgTimeFormat = v)
     }
+    fun setEpgDisplayTimeZone(v: String) {
+        val zone = v.trim().ifBlank { "device" }
+        save { it[KEY_EPG_DISPLAY_TIME_ZONE] = zone }
+        TimeFormatter.setDisplayTimeZone(zone)
+        _state.value = _state.value.copy(epgDisplayTimeZone = zone)
+    }
     fun setEpgShowDescriptions(v: Boolean) { save { it[KEY_EPG_DESCRIPTIONS]    = v }; _state.value = _state.value.copy(epgShowDescriptions = v) }
     fun setEpgCompactMode(v: Boolean)      { save { it[KEY_EPG_COMPACT]         = v }; _state.value = _state.value.copy(epgCompactMode = v) }
     fun setEpgThirdPartyEnabled(v: Boolean) { save { it[KEY_EPG_THIRD_PARTY_ENABLED] = v }; _state.value = _state.value.copy(epgThirdPartyEnabled = v) }
@@ -846,6 +868,11 @@ class SettingsViewModel @Inject constructor(
     fun setTimeshiftEnabled(v: Boolean) {
         save { it[KEY_TIMESHIFT_ENABLED] = v }
         _state.value = _state.value.copy(timeshiftEnabled = v)
+    }
+    /** Provider archive/replay is independent from the local live buffer. */
+    fun setProviderReplayEnabled(v: Boolean) {
+        save { it[KEY_PROVIDER_REPLAY_ENABLED] = v }
+        _state.value = _state.value.copy(providerReplayEnabled = v)
     }
 
     // ── v5.0 Adaptive Buffer + timeshift window setters ────────────────────────
@@ -1019,6 +1046,7 @@ class SettingsViewModel @Inject constructor(
     fun setVlcClockJitterMs(v: Int)        { save { it[KEY_VLC_CLOCK_JITTER_MS]  = v }; _state.value = _state.value.copy(vlcClockJitterMs = v) }
     fun setVlcNetworkMtu(v: Int)           { save { it[KEY_VLC_NETWORK_MTU]      = v }; _state.value = _state.value.copy(vlcNetworkMtu = v) }
     fun setVlcVerboseLog(v: Boolean)       { save { it[KEY_VLC_VERBOSE_LOG]      = v }; _state.value = _state.value.copy(vlcVerboseLog = v) }
+    fun setPreferMpvPlayback(v: Boolean)   { save { it[KEY_PREFER_MPV_PLAYBACK]  = v }; _state.value = _state.value.copy(preferMpvPlayback = v) }
     // ── Player Experience setters ─────────────────────────────────────────────
     fun setSkipInterval(v: Int)            { save { it[KEY_SKIP_INTERVAL]          = v }; _state.value = _state.value.copy(skipIntervalSeconds = v) }
     fun setControlsAutoHide(v: Int)        { save { it[KEY_CONTROLS_AUTOHIDE]      = v }; _state.value = _state.value.copy(controlsAutoHideSeconds = v) }

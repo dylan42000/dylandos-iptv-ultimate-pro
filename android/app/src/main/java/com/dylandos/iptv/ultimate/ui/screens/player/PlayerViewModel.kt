@@ -50,6 +50,8 @@ class PlayerViewModel @Inject constructor(
     private val zapDebounceMs = 220L
     private var lastChannelStreamId: Int? = null
     private var numberJumpJob: Job? = null
+    private var catchupUrlCandidates: List<String> = emptyList()
+    private var catchupUrlIndex: Int = 0
 
     /**
      * @param streamId  String — live/VOD use numeric IDs; series episodes can be non-numeric (#6 fix)
@@ -84,12 +86,16 @@ class PlayerViewModel @Inject constructor(
                             )
                             return@launch
                         }
-                        xtreamRepository.getTimeshiftStreamUrl(
+                        catchupUrlCandidates = xtreamRepository.getTimeshiftStreamUrlCandidates(
                             streamId = token.channelId,
                             startTimestampSec = token.startTimestampSec,
                             durationMinutes = token.durationMinutes,
-                            extension = extension.ifEmpty { "ts" }
+                            preferredExtension = extension.ifEmpty { "ts" },
+                            providerStartTimestampSec = token.providerStartTimestampSec,
+                            providerStartWallClock = token.providerStartWallClock
                         )
+                        catchupUrlIndex = 0
+                        catchupUrlCandidates.firstOrNull() ?: throw IllegalStateException("No catch-up URL candidates")
                     }
                     // DVR: streamId IS the file URI (content:// or absolute path) — use directly
                     "dvr"    -> streamId
@@ -207,6 +213,33 @@ class PlayerViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    /** Advance to the next provider archive URL and restart the entire player ladder. */
+    fun retryCatchupWithNextUrl(): Boolean {
+        if (!_uiState.value.isCatchupPlayback || catchupUrlIndex >= catchupUrlCandidates.lastIndex) return false
+        catchupUrlIndex++
+        val nextUrl = catchupUrlCandidates[catchupUrlIndex]
+        Timber.w("Replay retry: provider URL candidate ${catchupUrlIndex + 1}/${catchupUrlCandidates.size}")
+        _uiState.value = _uiState.value.copy(streamUrl = nextUrl, isLoading = false, error = null)
+        return true
+    }
+
+    /** User-requested clean retry after every archive URL/engine combination has failed. */
+    fun restartCatchupRecovery(): Boolean {
+        if (!_uiState.value.isCatchupPlayback || catchupUrlCandidates.isEmpty()) return false
+        catchupUrlIndex = 0
+        val current = _uiState.value
+        val firstUrl = catchupUrlCandidates.first()
+        // Clear the URL momentarily so Compose creates a new playback request even when
+        // the first archive candidate is the same string as the failed request.
+        _uiState.value = current.copy(streamUrl = "", error = null, isLoading = true)
+        viewModelScope.launch {
+            delay(80L)
+            _uiState.value = current.copy(streamUrl = firstUrl, error = null, isLoading = false)
+        }
+        Timber.i("Replay recovery restarted with ${catchupUrlCandidates.size} provider candidates")
+        return true
     }
 
     /**
@@ -629,7 +662,7 @@ class PlayerViewModel @Inject constructor(
 
     fun buildTimeShiftToken(streamId: Int, startMs: Long, endMs: Long): String {
         val safeStartSec = (startMs / 1000L).coerceAtLeast(0L)
-        val durationMin = ((endMs - startMs) / 60_000L).coerceAtLeast(1L).toInt()
+        val durationMin = ((endMs - startMs + 59_999L) / 60_000L).coerceAtLeast(1L).toInt()
         return "${streamId}_${safeStartSec}_${durationMin}"
     }
 
@@ -671,17 +704,30 @@ private data class VodContext(
 private data class TimeShiftToken(
     val channelId: Int,
     val startTimestampSec: Long,
-    val durationMinutes: Int
+    val durationMinutes: Int,
+    val providerStartTimestampSec: Long = 0L,
+    val providerStartWallClock: String? = null
 )
 
 private fun parseTimeshiftToken(token: String): TimeShiftToken? {
     val parts = token.split('_')
-    if (parts.size != 3) return null
+    if (parts.size < 3) return null
     val channelId = parts[0].toIntOrNull() ?: return null
     val startSec = parts[1].toLongOrNull() ?: return null
     val durationMin = parts[2].toIntOrNull() ?: return null
     if (channelId <= 0 || durationMin <= 0) return null
-    return TimeShiftToken(channelId = channelId, startTimestampSec = startSec, durationMinutes = durationMin)
+    val providerStart = parts.getOrNull(3)?.toLongOrNull()?.takeIf { it > 0L } ?: 0L
+    val wallDigits = parts.getOrNull(4)?.takeIf { it.length == 12 && it.all(Char::isDigit) }
+    val wallClock = wallDigits?.let {
+        "${it.substring(0, 4)}-${it.substring(4, 6)}-${it.substring(6, 8)}:${it.substring(8, 10)}-${it.substring(10, 12)}"
+    }
+    return TimeShiftToken(
+        channelId = channelId,
+        startTimestampSec = startSec,
+        durationMinutes = durationMin,
+        providerStartTimestampSec = providerStart,
+        providerStartWallClock = wallClock
+    )
 }
 
 data class PlayerUiState(

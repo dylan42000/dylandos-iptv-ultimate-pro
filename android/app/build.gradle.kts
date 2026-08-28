@@ -17,8 +17,10 @@ android {
         applicationId = "com.dylandos.iptv.ultimate"
         minSdk = 21  // Android 5.0 - Wide device compatibility
         targetSdk = 35
-        versionCode = 91
-        versionName = "5.2.0"
+        // v5.2.1: Fire TV guide display-timezone correction and OTA diagnostics.
+        // OTA only offers a Gist payload when its versionCode is strictly greater.
+        versionCode = 98
+        versionName = "5.2.7"
 
         // v5.1 release metadata (see RELEASE_PLAYBOOK.md):
         //   versionCode 90 / 5.1.0 — Smart EPG show-aware DVR naming, NFO sidecars,

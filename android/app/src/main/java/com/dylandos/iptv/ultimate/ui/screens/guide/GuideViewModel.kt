@@ -226,7 +226,7 @@ class GuideViewModel @Inject constructor(
     /** streamId_startSec_durationMin token for Screen.Player route. */
     fun buildTimeShiftToken(streamId: Int, startMs: Long, endMs: Long): String {
         val safeStartSec = (startMs / 1000L).coerceAtLeast(0L)
-        val durationMin = ((endMs - startMs) / 60_000L).coerceAtLeast(1L).toInt()
+        val durationMin = ((endMs - startMs + 59_999L) / 60_000L).coerceAtLeast(1L).toInt()
         return "${streamId}_${safeStartSec}_${durationMin}"
     }
 

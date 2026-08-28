@@ -65,6 +65,8 @@ import com.dylandos.iptv.ultimate.ui.focus.dylandosFocusGroup
 import com.dylandos.iptv.ultimate.ui.focus.dylandosFocusable
 import com.dylandos.iptv.ultimate.BuildConfig
 import com.dylandos.iptv.ultimate.data.util.StorageDetector
+import com.dylandos.iptv.ultimate.ui.update.UpdateState
+import com.dylandos.iptv.ultimate.ui.update.UpdateViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -82,6 +84,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    val updateViewModel: UpdateViewModel = hiltViewModel()
     val keyboardController = LocalSoftwareKeyboardController.current
 
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -226,7 +229,7 @@ fun SettingsScreen(
                         9  -> DvrSettingsTab(state, viewModel)
                         10 -> CategoriesTab(state, viewModel)
                         11 -> ParentalTab(state, viewModel)
-                        12 -> AboutTab()
+                        12 -> AboutTab(updateViewModel)
                     }
                 }
             }
@@ -873,6 +876,22 @@ private fun AccountEditorDialog(
     val passFR   = remember { FocusRequester() }
     val saveFR   = remember { FocusRequester() }
     val cancelFR = remember { FocusRequester() }
+    val canSave = serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank()
+    val saveAccount = {
+        if (canSave) {
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
+            onSave(
+                account.copy(
+                    nickname = nickname.trim().ifBlank { username.trim() },
+                    serverUrl = serverUrl.trim().trimEnd('/'),
+                    username = username.trim(),
+                    password = password,
+                    accountType = accountType
+                )
+            )
+        }
+    }
 
     Dialog(
         onDismissRequest = onCancel,
@@ -885,6 +904,8 @@ private fun AccountEditorDialog(
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.84f)
+                .fillMaxHeight(0.90f)
+                .imePadding()
                 .background(BgBase, RoundedCornerShape(20.dp))
                 .border(1.dp, BorderDefault, RoundedCornerShape(20.dp))
         ) {
@@ -996,7 +1017,7 @@ private fun AccountEditorDialog(
                     keyboardActions = KeyboardActions(onDone = {
                         keyboardController?.hide()
                         focusManager.clearFocus(force = true)
-                        saveFR.requestFocus()
+                        if (canSave) saveAccount() else saveFR.requestFocus()
                     }),
                     colors = accountFieldColors()
                 )
@@ -1110,23 +1131,8 @@ private fun AccountEditorDialog(
                     // Save
                     val saveInteraction = remember { MutableInteractionSource() }
                     val saveFocused2 by saveInteraction.collectIsFocusedAsState()
-                    val canSave = serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank()
                     Button(
-                        onClick = {
-                            if (canSave) {
-                                keyboardController?.hide()
-                                focusManager.clearFocus(force = true)
-                                onSave(
-                                    account.copy(
-                                        nickname    = nickname.trim().ifBlank { username.trim() },
-                                        serverUrl   = serverUrl.trim().trimEnd('/'),
-                                        username    = username.trim(),
-                                        password    = password,
-                                        accountType = accountType
-                                    )
-                                )
-                            }
-                        },
+                        onClick = saveAccount,
                         enabled = canSave,
                         modifier = Modifier
                             .weight(2f)
@@ -1141,17 +1147,7 @@ private fun AccountEditorDialog(
                             .onKeyEvent { event ->
                                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                                 if ((event.key == Key.DirectionCenter || event.key == Key.Enter) && canSave) {
-                                    keyboardController?.hide()
-                                    focusManager.clearFocus(force = true)
-                                    onSave(
-                                        account.copy(
-                                            nickname    = nickname.trim().ifBlank { username.trim() },
-                                            serverUrl   = serverUrl.trim().trimEnd('/'),
-                                            username    = username.trim(),
-                                            password    = password,
-                                            accountType = accountType
-                                        )
-                                    )
+                                    saveAccount()
                                     true
                                 } else false
                             },
@@ -1204,7 +1200,20 @@ private fun PlaybackTab(state: SettingsUiState, viewModel: SettingsViewModel) {
             onSelect = viewModel::setStreamFormat
         )
 
-        SectionHeader("Live TV Buffer")
+        SectionHeader("Provider Replay (past programmes)")
+        SwitchRow(
+            "Show Replay Tab",
+            state.providerReplayEnabled,
+            viewModel::setProviderReplayEnabled
+        )
+        InfoCard(
+            "Provider Replay",
+            "Shows the provider's archived programmes in the Replay tab with programme names and dates. " +
+                "This does not use USB/local Timeshift and can stay enabled when local pause and rewind are off. " +
+                "Only channels your provider marks as catch-up capable appear."
+        )
+
+        SectionHeader("Local Live Pause & Rewind")
         SegmentedPick(
             options = listOf("Low", "Medium", "High"),
             selected = state.liveBufferPreset,
@@ -1225,11 +1234,20 @@ private fun PlaybackTab(state: SettingsUiState, viewModel: SettingsViewModel) {
             )
         }
         InfoCard(
-            "Smart Timeshift",
-            "Uses provider catch-up when available and a local disk-backed player buffer otherwise. " +
+            "Local Timeshift",
+            "Uses a disk-backed buffer on this FireStick for live Pause, Rewind and Fast Forward. " +
+                "It is separate from Provider Replay above, so turn this off if a stream is unstable. " +
                 "FireStick media Rewind, Fast Forward, and Play/Pause keys are mapped directly. " +
                 "Window = how far back you can rewind (Auto sizes the disk ring to free space, " +
                 "max 8 GB)."
+        )
+
+        SectionHeader("Playback Engine")
+        SwitchRow("Prefer MPV for VOD & Replay", state.preferMpvPlayback, viewModel::setPreferMpvPlayback)
+        InfoCard(
+            "MPV with safe fallback",
+            "Uses MPV first for movies, series, and provider Replay. If MPV cannot start or loses video, " +
+                "playback automatically falls back to LibVLC and then Media3. Live TV stays on the proven LibVLC/Media3 path."
         )
 
         SectionHeader("Reconnect")
@@ -1377,6 +1395,23 @@ private fun EpgTab(state: SettingsUiState, viewModel: SettingsViewModel) {
             selected = state.epgTimeFormat,
             labels = listOf("24-hour", "12-hour AM/PM"),
             onSelect = viewModel::setEpgTimeFormat
+        )
+        Text(
+            "Guide display timezone",
+            color = TextPrimary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        SegmentedPick(
+            options = listOf("device", "America/Denver", "America/Los_Angeles"),
+            selected = state.epgDisplayTimeZone,
+            labels = listOf("Fire TV", "Mountain", "Pacific"),
+            onSelect = viewModel::setEpgDisplayTimeZone
+        )
+        Text(
+            "Display only — it never shifts programme data, recordings, or catch-up times.",
+            color = TextSecondary,
+            fontSize = 11.sp
         )
         SwitchRow("Show programme descriptions", state.epgShowDescriptions, viewModel::setEpgShowDescriptions)
         SwitchRow("Compact row mode", state.epgCompactMode, viewModel::setEpgCompactMode)
@@ -3199,11 +3234,21 @@ private fun ParentalTab(state: SettingsUiState, viewModel: SettingsViewModel) {
 }
 
 @Composable
-private fun AboutTab() {
+private fun AboutTab(updateViewModel: UpdateViewModel) {
     // Never call native LibVLC from composition without catching Throwable —
     // UnsatisfiedLinkError is an Error (not Exception) and was killing the process
     // when scrolling to the About tab on Firestick.
     val vlcVersion = remember { "3.6.0" }
+    val updateState by updateViewModel.state.collectAsState()
+    val updateStatus = when (val current = updateState) {
+        UpdateState.Idle -> "Not checked in this session"
+        UpdateState.Checking -> "Checking GitHub Gist…"
+        is UpdateState.UpToDate -> "No newer signed release than build ${current.localVersionCode}"
+        is UpdateState.Available -> "Update v${current.info.versionName} is ready"
+        is UpdateState.Downloading -> "Downloading update: ${current.progressPct}%"
+        is UpdateState.ReadyToInstall -> "Update downloaded — ready to install"
+        is UpdateState.Error -> "Update check failed: ${current.message}"
+    }
 
     Column(
         modifier = Modifier
@@ -3244,6 +3289,12 @@ private fun AboutTab() {
         AboutRow("Network", "OkHttp + Retrofit · Xtream Codes API")
         AboutRow("Database", "Room · dylandos_iptv_db")
         AboutRow("OTA Channel", "GitHub Gist auto-check (launch + resume)")
+        AboutRow("OTA Status", updateStatus)
+        Button(onClick = updateViewModel::checkNow) {
+            Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Check for updates now")
+        }
 
         HorizontalDivider(color = BorderDefault)
 

@@ -1,80 +1,22 @@
-# 🌟 DYLANDOS IPTV ULTIMATE — Web Portal & Website Guide
+# Dylandos IPTV Ultimate — beta website
 
-Welcome to the official web portal for **DYLANDOS IPTV ULTIMATE (v4.8.1)**!
+This folder is the static product and beta-access site for the current release tracks:
 
-This directory (`website/`) is a 100% standalone, zero-dependency static web application designed to showcase the DYLANDOS IPTV ULTIMATE desktop & Firestick app.
+- Windows: `5.2.0`
+- Android / Fire TV: `5.2.7`
 
----
+It accurately describes the player as a bring-your-own-provider app; it does not offer IPTV channels, playlists, subscriptions, or access to copyrighted content.
 
-## 🚀 How to Run & Preview the Website
+## Preview locally
 
-### Option 1: Direct Local Server (Recommended for instant local access)
-Run either of these commands in your command prompt / terminal from the root workspace directory:
+From the repository root, run `npx serve website -p 8085`, then open `http://localhost:8085`.
 
-```bash
-# Using Node.js serve
-npx serve website -p 8085
-```
+## Beta portal
 
-Or using Python:
-```bash
-# Using Python builtin HTTP server
-python -m http.server 8085 --directory website
-```
+The sign-up, sign-in, beta request, and portal UI work immediately as a browser-local prototype. That lets the design be reviewed without collecting user information on an unsecured static host.
 
-Then open your browser and navigate to:
-👉 **`http://localhost:8085`**
+Before publishing the beta form, set `data-beta-endpoint` on the `<body>` in `index.html` to a secure HTTPS endpoint that accepts a JSON `POST`. The endpoint must validate input, obtain consent, store passwords only with a proper authentication provider (never the browser-local prototype), and notify the beta team. Do not collect IPTV credentials, playlist URLs, or private content information.
 
----
+## Assets
 
-### Option 2: Direct File Opening
-Double-click `index.html` inside the `website/` directory to open it in Chrome, Edge, Firefox, or Brave.
-
----
-
-## 📁 Website Folder Structure
-
-```text
-website/
-├── index.html            # Main HTML5 portal application
-├── styles.css            # Futuristic glassmorphism CSS aesthetics
-├── app.js                # High-performance, zero-dependency interactive JS engine
-├── README.md             # Complete running & deployment instructions
-├── DEPLOYMENT_GUIDE.md   # Step-by-step Netlify, Vercel & GitHub Pages guide
-└── images/               # App showcase screenshots & iconography
-    ├── hero.png
-    ├── live-tv.png
-    ├── vod-movies.png
-    ├── firestick-tv.png
-    ├── multiscreen.png
-    ├── speed-engine.png
-    └── icon.png
-```
-
----
-
-## ⚡ Interactive Features Built-in
-
-1. **Interactive Demo Player**: Test live channel switching, multi-view 4-way split toggling, and stream FPS/bitrate metrics directly in your web browser.
-2. **Lightbox Screenshot Gallery**: Click any screenshot for high-resolution visual previews.
-3. **M3U Playlist Speed Tester**: Input any M3U playlist or Xtream Codes URL to simulate instant parsing.
-4. **Multi-Device Guides**: Dedicated tabs for Windows PC setup, Amazon Firestick (Downloader code `948210`), and Android TV APK.
-5. **Feature Matrix**: Side-by-side performance comparison vs TiviMate, IPTV Smarters, and VLC.
-
----
-
-## 🌐 Deploying Live to the Internet (Free 60-Second Setup)
-
-To publish this website live on the web:
-
-1. **Netlify Drop (Easiest & Free)**:
-   - Go to [app.netlify.com/drop](https://app.netlify.com/drop)
-   - Drag & drop the `website` folder directly into your browser window.
-   - Live URL generated instantly with free SSL!
-
-2. **GitHub Pages (Free)**:
-   - Push the repo to GitHub.
-   - Go to **Settings -> Pages** -> Select branch `main` and directory `/website`.
-
-3. **Vercel**:
-   - Run `npx vercel website` or import repo in [Vercel Dashboard](https://vercel.com).
+Images in `images/` are product screenshots and app artwork from this repository. They are intentionally used instead of stock imagery so the site reflects the actual product.

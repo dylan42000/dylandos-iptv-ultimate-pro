@@ -21,12 +21,16 @@ import coil.request.ImageRequest
 import com.dylandos.iptv.ultimate.data.util.AppStartupProfiler
 import com.dylandos.iptv.ultimate.data.util.FieldTelemetry
 import com.dylandos.iptv.ultimate.data.util.MemoryBudgetManager
+import com.dylandos.iptv.ultimate.ui.screens.settings.SettingsViewModel
+import com.dylandos.iptv.ultimate.ui.screens.settings.dataStore
+import com.dylandos.iptv.ultimate.ui.util.TimeFormatter
 import com.dylandos.iptv.ultimate.workers.WatchHistoryPruneWorker
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import okhttp3.OkHttpClient
 import timber.log.Timber
 import javax.inject.Inject
@@ -121,6 +125,16 @@ class DylandosApp : Application(), Configuration.Provider, ImageLoaderFactory {
         // Defer maintenance scheduling to background and make it non-fatal.
         applicationScope.launch(Dispatchers.IO) {
             scheduleWatchHistoryPruneSafely()
+        }
+
+        // Fire OS occasionally exposes UTC as the process default despite a local system
+        // clock. Load the user's render-only guide timezone before any EPG refresh. This
+        // never alters programme epochs, catch-up URLs, or DVR schedule times.
+        applicationScope.launch(Dispatchers.IO) {
+            val zone = dataStore.data.first()[SettingsViewModel.KEY_EPG_DISPLAY_TIME_ZONE]
+                ?: "America/Denver"
+            TimeFormatter.setDisplayTimeZone(zone)
+            Timber.i("Guide display timezone: ${TimeFormatter.displayTimeZone().id}")
         }
 
         // B3: guarded crash reporting — blank SENTRY_DSN (default) means the SDK is never

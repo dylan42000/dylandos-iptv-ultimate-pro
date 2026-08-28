@@ -182,6 +182,8 @@ class XtreamRepository @Inject constructor(
         const val VOD_CACHE_TTL_MS   = 15 * 60 * 1_000L   // 15 minutes for VOD lists
         const val INFO_CACHE_TTL_MS  = 15 * 60 * 1_000L   // 15 minutes for movie/series detail
         const val SHORT_EPG_CACHE_TTL_MS = 15 * 60 * 1_000L
+        /** Prevent an unavailable recording from causing an unbounded retry storm. */
+        const val MAX_CATCHUP_URL_CANDIDATES = 10
     }
 
     private data class CacheEntry<T>(val data: T, val timestamp: Long = System.currentTimeMillis()) {
@@ -512,6 +514,66 @@ class XtreamRepository @Inject constructor(
         return "$serverUrl/timeshift/$username/$password/$safeDuration/$startUtc/$streamId.$safeExt"
     }
 
+    /**
+     * Provider archive implementations vary wildly.  Try the selected container first,
+     * then the other common container, then the legacy Xtream PHP endpoint.  This is
+     * intentionally URL-only: playback still uses the normal MPV → LibVLC → Media3 ladder.
+     */
+    fun getTimeshiftStreamUrlCandidates(
+        streamId: Int,
+        startTimestampSec: Long,
+        durationMinutes: Int,
+        preferredExtension: String = "ts",
+        providerStartTimestampSec: Long = 0L,
+        providerStartWallClock: String? = null
+    ): List<String> {
+        val preferred = preferredExtension.lowercase().removePrefix(".").ifBlank { "ts" }
+        val containers = listOf(preferred, if (preferred == "m3u8") "ts" else "m3u8").distinct()
+        val duration = durationMinutes.coerceAtLeast(1)
+        val paddedDuration = (duration + 1).coerceAtMost(480)
+        val normalizedStart = startTimestampSec.coerceAtLeast(0L)
+        val sourceStart = providerStartTimestampSec.coerceAtLeast(0L)
+        val encodedUser = java.net.URLEncoder.encode(username, Charsets.UTF_8.name())
+        val encodedPass = java.net.URLEncoder.encode(password, Charsets.UTF_8.name())
+        fun standard(start: String, minutes: Int, extension: String) =
+            "$serverUrl/timeshift/$username/$password/$minutes/$start/$streamId.$extension"
+        fun formatStart(timestampSec: Long, zone: TimeZone) =
+            SimpleDateFormat("yyyy-MM-dd:HH-mm", Locale.US).apply { timeZone = zone }
+                .format(Date(timestampSec * 1_000L))
+        fun normalizeProviderWallClock(raw: String?): String? {
+            val numbers = raw.orEmpty().filter(Char::isDigit)
+            return numbers.takeIf { it.length >= 12 }?.take(12)?.let {
+                "${it.substring(0, 4)}-${it.substring(4, 6)}-${it.substring(6, 8)}:${it.substring(8, 10)}-${it.substring(10, 12)}"
+            }
+        }
+        fun legacy(start: Long, minutes: Int) =
+            "$serverUrl/streaming/timeshift.php?username=$encodedUser&password=$encodedPass&stream=$streamId&start=$start&end=${start + minutes * 60L}"
+
+        // The guide uses corrected timestamps, but archive servers may index by either
+        // the raw server epoch or the literal wall-clock string returned in the EPG.
+        // Keep the ladder finite and ordered: canonical first, then provider-native forms.
+        val startVariants = linkedSetOf(
+            formatStart(normalizedStart, TimeZone.getTimeZone("UTC"))
+        ).apply {
+            normalizeProviderWallClock(providerStartWallClock)?.let(::add)
+            if (sourceStart > 0L && sourceStart != normalizedStart) {
+                add(formatStart(sourceStart, TimeZone.getTimeZone("UTC")))
+                add(formatStart(sourceStart, providerTimeZone()))
+            }
+        }.toList()
+        val candidates = mutableListOf<String>()
+        startVariants.forEachIndexed { index, start ->
+            containers.forEach { extension -> candidates += standard(start, duration, extension) }
+            // Some archive backends reject an EPG span that was rounded down by one minute.
+            if (index < 2 && paddedDuration != duration) {
+                candidates += standard(start, paddedDuration, preferred)
+            }
+        }
+        candidates += legacy(normalizedStart, duration)
+        if (sourceStart > 0L && sourceStart != normalizedStart) candidates += legacy(sourceStart, duration)
+        return candidates.distinct().take(MAX_CATCHUP_URL_CANDIDATES)
+    }
+
     // ── VOD / Movies ───────────────────────────────────────────────────
 
     suspend fun getVodCategories(): Result<List<XtreamCategory>> = withContext(Dispatchers.IO) {
@@ -816,6 +878,10 @@ class XtreamRepository @Inject constructor(
         val decoded = programs.map { p ->
             val startText = decodeEpgString(p.start)
             val endText = decodeEpgString(p.end)
+            // Keep the unmodified panel values for the catch-up endpoint.  The values below
+            // may be reconciled/aligned for correct guide presentation on the Firestick.
+            val archiveStartSec = normalizeEpgEpochSeconds(p.startTimestamp)
+            val archiveStopSec = normalizeEpgEpochSeconds(p.stopTimestamp)
             val rawStartSec = reconcileProviderEpgTime(startText, p.startTimestamp)
             val rawEndSec = reconcileProviderEpgTime(endText, p.stopTimestamp)
             p.copy(
@@ -824,7 +890,10 @@ class XtreamRepository @Inject constructor(
                 start       = startText,
                 end         = endText,
                 startTimestamp = if (rawStartSec > 0L) rawStartSec + offsetSec else 0L,
-                stopTimestamp  = if (rawEndSec > 0L) rawEndSec + offsetSec else 0L
+                stopTimestamp  = if (rawEndSec > 0L) rawEndSec + offsetSec else 0L,
+                archiveStartTimestamp = archiveStartSec,
+                archiveStopTimestamp = archiveStopSec,
+                archiveStartWallClock = startText
             )
         }
         return alignEpgProgramsToNow(decoded)

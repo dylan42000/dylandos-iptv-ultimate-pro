@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { XtreamChannel } from '../types/xtream';
 import { xtreamApi as xtream } from '../services/xtreamApi';
+import { fetchCatchupEpgForStream } from '../services/shortEpgCache';
 import { RecordingButton } from '../components/RecordingButton';
 
 interface RecordingMeta {
@@ -403,7 +404,7 @@ const CatchupTab: React.FC<{
     return archiveChannels.length > 0 ? archiveChannels[0].stream_id : null;
   });
   const [search, setSearch] = useState('');
-  const [programs, setPrograms] = useState<any[]>([]);
+  const [programs, setPrograms] = useState<import('../types/epg').EPGProgram[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -427,14 +428,10 @@ const CatchupTab: React.FC<{
     setLoading(true);
     setError('');
 
-    xtream.getShortEpg(selectedChannelId, 40)
-      .then(res => {
+    fetchCatchupEpgForStream(selectedChannelId, 40)
+      .then(listings => {
         if (!mounted) return;
-        if (res?.epg_listings && Array.isArray(res.epg_listings)) {
-          setPrograms(res.epg_listings);
-        } else {
-          setPrograms([]);
-        }
+        setPrograms(listings);
       })
       .catch(err => {
         if (!mounted) return;
@@ -523,14 +520,14 @@ const CatchupTab: React.FC<{
         ) : (
           <div className="flex-1 overflow-y-auto space-y-2 pr-2">
             {programs.map((item, idx) => {
-              const startTs = item.start_timestamp ? Number(item.start_timestamp) * 1000 : new Date(item.start).getTime();
-              const stopTs = item.stop_timestamp ? Number(item.stop_timestamp) * 1000 : new Date(item.end).getTime();
+              const startTs = new Date(item.startTime).getTime();
+              const stopTs = new Date(item.stopTime).getTime();
               const durationMin = Math.max(5, Math.round((stopTs - startTs) / 60000));
               const isPast = stopTs < Date.now();
 
               return (
                 <div
-                  key={item.id || idx}
+                  key={`${item.startTime}-${item.title}-${idx}`}
                   className="flex items-center justify-between p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.06] hover:border-cyan-500/30 hover:bg-white/[0.04] transition-all"
                 >
                   <div className="min-w-0 flex-1 mr-4">

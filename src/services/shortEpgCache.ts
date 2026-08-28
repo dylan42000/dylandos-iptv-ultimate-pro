@@ -138,6 +138,32 @@ export async function fetchShortEpgForStream(
   return task;
 }
 
+/**
+ * Resolve replay metadata without guessing titles. Some panels make
+ * get_short_epg future-only while get_simple_data_table contains the actual
+ * past broadcasts. Query the heavier endpoint only when short EPG has no
+ * usable archive rows.
+ */
+export async function fetchCatchupEpgForStream(
+  streamId: number,
+  limit = 40
+): Promise<EPGProgram[]> {
+  const shortPrograms = parseShortEpgListings(
+    await xtreamApi.getShortEpg(streamId, limit),
+    String(streamId)
+  );
+  const hasPastProgram = shortPrograms.some(
+    (program) => new Date(program.stopTime).getTime() < Date.now()
+  );
+  if (hasPastProgram) return shortPrograms;
+
+  const fullPrograms = parseShortEpgListings(
+    await xtreamApi.getSimpleDataTable(streamId),
+    String(streamId)
+  );
+  return fullPrograms.length > 0 ? fullPrograms : shortPrograms;
+}
+
 /** Hydrate short EPG for many channels with limited concurrency. */
 export async function hydrateShortEpgBatch(
   streamIds: number[],

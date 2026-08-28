@@ -255,6 +255,17 @@ export class XtreamApi {
     );
   }
 
+  /**
+   * Full provider EPG table. Unlike get_short_epg, this commonly includes the
+   * historical rows needed to label server-side catch-up recordings.
+   */
+  async getSimpleDataTable(streamId: number, signal?: AbortSignal): Promise<any> {
+    return this.fetchJson(
+      this.buildUrl('get_simple_data_table', { stream_id: String(streamId) }),
+      signal
+    );
+  }
+
   getXmltvUrl(): string {
     return `${this.serverUrl}/xmltv.php?username=${encodeURIComponent(this.username)}&password=${encodeURIComponent(this.password)}`;
   }
@@ -284,6 +295,25 @@ export class XtreamApi {
    */
   getCatchupStreamUrlAlt(streamId: number, startTimestamp: number, endTimestamp: number): string {
     return `${this.serverUrl}/streaming/timeshift.php?username=${encodeURIComponent(this.username)}&password=${encodeURIComponent(this.password)}&stream=${streamId}&start=${startTimestamp}&end=${endTimestamp}`;
+  }
+
+  /** Ordered provider archive candidates: standard TS, HLS, then legacy Xtream PHP. */
+  getCatchupStreamUrlCandidates(streamId: number, start: Date, durationMinutes: number): string[] {
+    const duration = Math.max(1, Math.round(durationMinutes));
+    const startTimestamp = Math.floor(start.getTime() / 1000);
+    const endTimestamp = startTimestamp + duration * 60;
+    // Keep the timestamp convention identical to the original catch-up URL.
+    // Providers typically interpret this wall-clock value in the account/EPG
+    // timezone, so converting it to UTC here can select the wrong programme.
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const startStr = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}:${pad(start.getHours())}-${pad(start.getMinutes())}`;
+    const standard = (extension: 'ts' | 'm3u8') =>
+      `${this.serverUrl}/timeshift/${this.username}/${this.password}/${duration}/${startStr}/${streamId}.${extension}`;
+    return [...new Set([
+      standard('ts'),
+      standard('m3u8'),
+      this.getCatchupStreamUrlAlt(streamId, startTimestamp, endTimestamp),
+    ])];
   }
 }
 

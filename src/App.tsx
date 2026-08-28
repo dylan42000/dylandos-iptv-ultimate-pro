@@ -908,8 +908,8 @@ export const App: React.FC = () => {
     const start = new Date(program.startTime);
     const end = new Date(program.stopTime);
     const durationMin = Math.round((end.getTime() - start.getTime()) / 60000);
-    const url = xtream.getCatchupStreamUrl(channel.stream_id, start, durationMin);
-    setFallbackStreamUrls([]);
+    const [url, ...fallbackUrls] = xtream.getCatchupStreamUrlCandidates(channel.stream_id, start, durationMin);
+    setFallbackStreamUrls(fallbackUrls);
     setStreamUrl(url);
     setStreamTitle(`[DVR] ${program.title} — ${channel.name}`);
     setStreamType('vod');

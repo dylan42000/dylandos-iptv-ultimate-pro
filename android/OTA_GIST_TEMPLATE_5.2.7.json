@@ -1,0 +1,24 @@
+{
+  "versionCode": 98,
+  "version": "5.2.7",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "REPLAY: Archive playback now preserves the provider's original archive timestamp separately from the corrected guide clock.",
+    "REPLAY: Each provider URL now receives a complete LibVLC then Media3 pass before moving to the next time, duration, container, or legacy endpoint variant.",
+    "REPLAY: Added provider wall-clock, raw server timestamp, HLS/TS, small duration-padding, and legacy Xtream archive variants with a safe bounded retry limit.",
+    "REPLAY: The playback error screen now offers Retry Replay to restart the full provider-and-player recovery ladder."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_SIGNED_FIRESTICK_APK_DIRECT_URL",
+      "apkSize": 70862421,
+      "sha256": "12D95B1FF3125FA2B76C5E6F9BFC541E3FBF2362A58107D9E1819B28B87C952D"
+    },
+    "premium": {
+      "apkUrl": "REPLACE_WITH_SIGNED_ANDROID_APK_DIRECT_URL",
+      "apkSize": 71901099,
+      "sha256": "AC33BF268A79D3CFE6A7D5457FCEA816797A1AAB435810C67E02528B4860C6C2"
+    }
+  }
+}

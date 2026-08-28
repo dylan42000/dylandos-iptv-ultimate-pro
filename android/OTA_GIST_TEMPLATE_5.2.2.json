@@ -1,0 +1,18 @@
+{
+  "versionCode": 93,
+  "version": "5.2.2",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "NEW: Dedicated Fire TV Replay tab for provider-hosted past programmes.",
+    "NEW: Provider Replay and local Pause/Rewind Timeshift can be enabled independently.",
+    "FIX: Replay loads the provider's full programme table so past recordings show decoded programme names."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_SIGNED_FIRESTICK_APK_DIRECT_URL",
+      "apkSize": 70846831,
+      "sha256": "B9FF36E83F18C7714ABEC416E32AABCC503818B5E28FD865974E2CB8CF17FA7E"
+    }
+  }
+}

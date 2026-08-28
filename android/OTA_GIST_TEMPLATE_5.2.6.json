@@ -1,0 +1,23 @@
+{
+  "versionCode": 97,
+  "version": "5.2.6",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "REPLAY: Provider archive playback now tries TS, HLS, and legacy Xtream endpoints across the enabled player recovery ladder.",
+    "PREMIUM: Phone-safe layout keeps guide and touch controls clear of system bars; player defaults to aspect-fit with tap, double-tap seek, and long-press aspect controls.",
+    "WINDOWS: Movie, series, and Live TV category selectors now open above clipped panels and provide a large scrollable picker."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_SIGNED_FIRESTICK_APK_DIRECT_URL",
+      "apkSize": 70859007,
+      "sha256": "9FCDF6D2946927F5B8AF9BA9AB49C13885B0B44B27E8819E3F49981D056BD024"
+    },
+    "premium": {
+      "apkUrl": "REPLACE_WITH_SIGNED_ANDROID_APK_DIRECT_URL",
+      "apkSize": 71897643,
+      "sha256": "DE6CFAA5BAA876FD97BC84034D768D58206B276668E865CF5187730889D1C233"
+    }
+  }
+}

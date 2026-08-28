@@ -89,7 +89,13 @@ class UpdateChecker @Inject constructor(
             }
 
             Timber.d("OTA: remote v${best.versionCode} (${best.versionName}), local v${BuildConfig.VERSION_CODE}")
-            if (best.versionCode <= BuildConfig.VERSION_CODE) return@withContext null
+            if (!isNewerVersion(best.versionCode, BuildConfig.VERSION_CODE)) {
+                Timber.i(
+                    "OTA: no update offered because remote versionCode=${best.versionCode} " +
+                        "is not newer than local=${BuildConfig.VERSION_CODE}"
+                )
+                return@withContext null
+            }
 
             val changelog = best.changelog
             val releaseNotes = if (changelog.isNotEmpty()) {
@@ -211,6 +217,10 @@ class UpdateChecker @Inject constructor(
             minRequiredVersionCode = minRequiredVersionCode
         )
     }
+
+    /** Kept separate so the strict OTA version gate has a regression test. */
+    internal fun isNewerVersion(remoteVersionCode: Int, localVersionCode: Int): Boolean =
+        remoteVersionCode > localVersionCode
 
     private data class VariantAsset(
         val apkUrl: String,

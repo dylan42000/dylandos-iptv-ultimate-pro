@@ -123,4 +123,10 @@ class UpdateCheckerTest {
     fun `non-json input is refused`() {
         assertNull(checker.parseUpdateJson("not json at all"))
     }
+
+    @Test
+    fun `equal Gist version code deliberately does not trigger an update`() {
+        assertEquals(false, checker.isNewerVersion(remoteVersionCode = 91, localVersionCode = 91))
+        assertEquals(true, checker.isNewerVersion(remoteVersionCode = 92, localVersionCode = 91))
+    }
 }

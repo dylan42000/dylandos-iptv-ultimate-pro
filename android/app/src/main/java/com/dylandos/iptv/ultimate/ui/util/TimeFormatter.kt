@@ -18,11 +18,32 @@ import java.util.TimeZone
  */
 object TimeFormatter {
 
+    /**
+     * Display-zone override for Fire TV builds whose firmware reports UTC even though the
+     * device is physically configured elsewhere. Programme timestamps remain UTC epoch
+     * instants; this controls rendering only and must never be used while parsing EPG data.
+     * "device" delegates to Android's normal default timezone.
+     */
+    @Volatile private var displayTimeZoneId: String = "device"
+
+    fun setDisplayTimeZone(id: String?) {
+        displayTimeZoneId = id?.trim()?.takeIf { it.isNotEmpty() } ?: "device"
+    }
+
+    fun displayTimeZone(): TimeZone {
+        if (displayTimeZoneId.equals("device", ignoreCase = true)) return TimeZone.getDefault()
+        val candidate = TimeZone.getTimeZone(displayTimeZoneId)
+        return if (candidate.id == "GMT" &&
+            !displayTimeZoneId.equals("GMT", ignoreCase = true) &&
+            !displayTimeZoneId.equals("UTC", ignoreCase = true)
+        ) TimeZone.getDefault() else candidate
+    }
+
     /** Formats a timestamp into a short time string (e.g., "8:30 PM" or "20:30"). */
     fun formatShortTime(
         epochMillis: Long,
         timeFormat: String = "12h",
-        timeZone: TimeZone = TimeZone.getDefault()
+        timeZone: TimeZone = displayTimeZone()
     ): String {
         val pattern = if (timeFormat.equals("24h", ignoreCase = true)) "HH:mm" else "h:mm a"
         return SimpleDateFormat(pattern, Locale.getDefault()).apply {
@@ -35,7 +56,7 @@ object TimeFormatter {
         startMs: Long,
         endMs: Long,
         timeFormat: String = "12h",
-        timeZone: TimeZone = TimeZone.getDefault()
+        timeZone: TimeZone = displayTimeZone()
     ): String {
         val pattern = if (timeFormat.equals("24h", ignoreCase = true)) "HH:mm" else "h:mm a"
         val sdf = SimpleDateFormat(pattern, Locale.getDefault()).apply {
@@ -48,7 +69,7 @@ object TimeFormatter {
     fun formatWindowLabel(
         windowStartMs: Long,
         timeFormat: String = "12h",
-        timeZone: TimeZone = TimeZone.getDefault()
+        timeZone: TimeZone = displayTimeZone()
     ): String {
         val pattern = if (timeFormat.equals("24h", ignoreCase = true)) {
             "EEE, MMM d  HH:mm"
@@ -64,7 +85,7 @@ object TimeFormatter {
     fun formatFullDateTime(
         epochMillis: Long,
         timeFormat: String = "12h",
-        timeZone: TimeZone = TimeZone.getDefault()
+        timeZone: TimeZone = displayTimeZone()
     ): String {
         val pattern = if (timeFormat.equals("24h", ignoreCase = true)) {
             "MMM d, yyyy  HH:mm"

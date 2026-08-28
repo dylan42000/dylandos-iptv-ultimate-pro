@@ -195,7 +195,9 @@ fun LoginScreen(
                                 isPassword = true,
                                 onDone = {
                                     keyboardController?.hide()
-                                    frConnect.requestFocus()
+                                    if (!state.isLoading && state.serverUrl.isNotBlank() && state.username.isNotBlank() && state.password.isNotBlank()) {
+                                        viewModel.connectXtream()
+                                    } else frConnect.requestFocus()
                                 }
                             )
                         }
@@ -212,7 +214,8 @@ fun LoginScreen(
                                 keyboardType = KeyboardType.Uri,
                                 onDone = {
                                     keyboardController?.hide()
-                                    frConnect.requestFocus()
+                                    if (!state.isLoading && state.m3uUrl.isNotBlank()) viewModel.connectM3U()
+                                    else frConnect.requestFocus()
                                 }
                             )
                         }

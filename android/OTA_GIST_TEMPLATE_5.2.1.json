@@ -1,0 +1,18 @@
+{
+  "versionCode": 92,
+  "version": "5.2.1",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "FIX: Fire TV guide, live-TV, and player clocks now render in Mountain time without changing EPG programme epochs.",
+    "FIX: Provider catch-up programme titles are normalized on Windows, including Base64 title payloads.",
+    "OTA: Added clear version-gate diagnostics."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_SIGNED_FIRESTICK_APK_DIRECT_URL",
+      "apkSize": 70839651,
+      "sha256": "702825C4095A4463FB4B1BC4AE508713089E00A4E3DCD4419099E179F57BC3CC"
+    }
+  }
+}

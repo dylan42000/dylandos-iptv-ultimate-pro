@@ -342,19 +342,20 @@ export const LiveTVPage: React.FC<LiveTVPageProps> = ({
                   <ChevronDown size={14} className="text-white/30" />
                 </button>
                 {showCategories && (
-                  <div className="absolute z-50 top-full mt-1 left-0 right-0 max-h-60 overflow-y-auto
-                    bg-[#12121e] border border-white/10 rounded-xl shadow-2xl">
-                    {categories.map(cat => (
-                      <button
-                        key={cat.category_id}
-                        onClick={() => selectCategory(String(cat.category_id))}
-                        className={`w-full text-left px-3 py-2 text-sm hover:bg-white/[0.04] ${
-                          String(selectedCategoryId) === String(cat.category_id) ? 'text-cyan-400' : 'text-white/60'
-                        }`}
-                      >
-                        {cat.category_name}
-                      </button>
-                    ))}
+                  <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-16" onClick={() => setShowCategories(false)}>
+                    <div onClick={event => event.stopPropagation()} className="w-80 max-h-[70dvh] overflow-y-auto bg-[#12121e] border border-white/10 rounded-xl shadow-2xl">
+                      {categories.map(cat => (
+                        <button
+                          key={cat.category_id}
+                          onClick={() => selectCategory(String(cat.category_id))}
+                          className={`w-full text-left px-3 py-2 text-sm hover:bg-white/[0.04] ${
+                            String(selectedCategoryId) === String(cat.category_id) ? 'text-cyan-400' : 'text-white/60'
+                          }`}
+                        >
+                          {cat.category_name}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

@@ -1,0 +1,23 @@
+{
+  "versionCode": 96,
+  "version": "5.2.5",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "FIX: Android/Premium Add Subscription now saves directly from the keyboard Done action and stays reachable above the keyboard.",
+    "FIX: Android/Premium login Done now connects directly when all required fields are valid.",
+    "MAINTENANCE: Matching signed assets for Premium and Firestick keep the shared OTA manifest safe."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_SIGNED_FIRESTICK_APK_DIRECT_URL",
+      "apkSize": 70856613,
+      "sha256": "1D1D841E77395B7B8A6663B9A00705D60553F6383496331EC8BD1ECABFE47934"
+    },
+    "premium": {
+      "apkUrl": "REPLACE_WITH_SIGNED_ANDROID_APK_DIRECT_URL",
+      "apkSize": 71894932,
+      "sha256": "E66784968D5C601A7F99BCAA6B5D81D417CCBB9DC0DA86BAC5EA056B01B2C086"
+    }
+  }
+}

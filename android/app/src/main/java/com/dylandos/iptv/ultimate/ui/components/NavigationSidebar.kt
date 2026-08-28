@@ -23,8 +23,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.dylandos.iptv.ultimate.ui.screens.settings.SettingsViewModel
+import com.dylandos.iptv.ultimate.ui.screens.settings.dataStore
 import com.dylandos.iptv.ultimate.ui.theme.DylandosPalette
+import kotlinx.coroutines.flow.map
 
 /**
  * NavigationSidebar — Vertical navigation rail for DYLANDOS TV.
@@ -68,6 +72,10 @@ fun NavigationSidebar(
     activeItemFocusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val replayEnabled by context.dataStore.data
+        .map { it[SettingsViewModel.KEY_PROVIDER_REPLAY_ENABLED] ?: true }
+        .collectAsState(initial = true)
     // Animated width: 80 dp collapsed ↔ 240 dp expanded
     val width by animateIntAsState(
         targetValue = if (isExpanded) 240 else 80,
@@ -116,7 +124,7 @@ fun NavigationSidebar(
             Spacer(modifier = Modifier.height(24.dp))
 
             // Main navigation items
-            navItems.forEach { item ->
+            navItems.filter { it.route != "replay" || replayEnabled }.forEach { item ->
                 SidebarItem(
                     icon       = item.icon,
                     selectedIcon = item.selectedIcon,
@@ -257,6 +265,7 @@ private val navItems = listOf(
     NavItem(Icons.Outlined.Home,          Icons.Filled.Home,          "Home",       "home"),
     NavItem(Icons.Outlined.Tv,            Icons.Filled.Tv,            "Live TV",    "live_tv"),
     NavItem(Icons.Outlined.CalendarMonth, Icons.Filled.CalendarMonth, "Guide",      "guide"),
+    NavItem(Icons.Outlined.History,       Icons.Filled.History,       "Replay",     "replay"),
     NavItem(Icons.Outlined.Movie,         Icons.Filled.Movie,         "Movies",     "movies"),
     NavItem(Icons.Outlined.VideoLibrary,  Icons.Filled.VideoLibrary,  "Series",     "series"),
     NavItem(Icons.Outlined.FiberDvr,      Icons.Filled.FiberDvr,      "DVR",        "dvr"),

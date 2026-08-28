@@ -19,6 +19,7 @@ import androidx.navigation.navArgument
 import com.dylandos.iptv.ultimate.ui.screens.home.HomeScreen
 import com.dylandos.iptv.ultimate.ui.screens.livetv.LiveTvScreen
 import com.dylandos.iptv.ultimate.ui.screens.guide.GuideScreen
+import com.dylandos.iptv.ultimate.ui.screens.replay.ReplayScreen
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.dylandos.iptv.ultimate.ui.screens.movies.MoviesScreen
 import com.dylandos.iptv.ultimate.ui.screens.movies.MovieDetailScreen
@@ -47,6 +48,7 @@ sealed class Screen(val route: String) {
     object Home     : Screen("home")
     object LiveTV   : Screen("live_tv")
     object Guide    : Screen("guide")
+    object Replay   : Screen("replay")
     object Movies   : Screen("movies")
     object Series   : Screen("series")
     object SeriesDetail : Screen("series_detail/{seriesId}") {
@@ -99,6 +101,10 @@ fun DylandosNavGraph(navController: NavHostController) {
 
         composable(Screen.Guide.route) {
             MainTvDestination(navController, Screen.Guide.route) { GuideScreen(navController) }
+        }
+
+        composable(Screen.Replay.route) {
+            MainTvDestination(navController, Screen.Replay.route) { ReplayScreen(navController) }
         }
 
         composable(Screen.Movies.route) {

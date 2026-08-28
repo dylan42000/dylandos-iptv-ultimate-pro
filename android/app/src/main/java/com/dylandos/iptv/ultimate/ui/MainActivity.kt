@@ -77,7 +77,11 @@ class MainActivity : ComponentActivity() {
 
             DylandosTheme(appTheme = currentTheme, customAccentHex = accentHex) {
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
+                    // Fire TV has no meaningful system bars, while phones do.  Keeping
+                    // Compose content inside the safe drawing area prevents guide dates,
+                    // touch targets, and player controls from being hidden under a phone's
+                    // status/navigation bars without changing the Fire TV layout.
+                    modifier = Modifier.fillMaxSize().safeDrawingPadding(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     DylandosApp(

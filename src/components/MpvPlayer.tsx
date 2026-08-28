@@ -35,6 +35,7 @@ import { useSettings } from '../hooks/useSettings';
 import { MpvStatsOverlay } from './MpvStatsOverlay';
 import { RecordingButton } from './RecordingButton';
 import { xtreamApi as xtream } from '../services/xtreamApi';
+import { fetchCatchupEpgForStream } from '../services/shortEpgCache';
 import type { XtreamChannel } from '../types/xtream';
 import type { EPGProgram } from '../types/epg';
 
@@ -121,7 +122,7 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
   const [showSubMenu, setShowSubMenu]   = useState(false);
   const [showStats, setShowStats]       = useState(false);
   const [showCatchupDrawer, setShowCatchupDrawer] = useState(false);
-  const [catchupPrograms, setCatchupPrograms] = useState<any[]>([]);
+  const [catchupPrograms, setCatchupPrograms] = useState<EPGProgram[]>([]);
   const [loadingCatchup, setLoadingCatchup] = useState(false);
 
   const toggleCatchup = useCallback(async () => {
@@ -131,10 +132,7 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
     if (nextState) {
       setLoadingCatchup(true);
       try {
-        const data = await xtream.getShortEpg(activeChannel.stream_id, 40);
-        if (data?.epg_listings && Array.isArray(data.epg_listings)) {
-          setCatchupPrograms(data.epg_listings);
-        }
+        setCatchupPrograms(await fetchCatchupEpgForStream(activeChannel.stream_id, 40));
       } catch {
         setCatchupPrograms([]);
       } finally {
@@ -143,10 +141,10 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
     }
   }, [activeChannel, showCatchupDrawer]);
 
-  const playCatchupItem = useCallback((item: any) => {
+  const playCatchupItem = useCallback((item: EPGProgram) => {
     if (!activeChannel) return;
-    const startTs = item.start_timestamp ? Number(item.start_timestamp) * 1000 : new Date(item.start).getTime();
-    const stopTs = item.stop_timestamp ? Number(item.stop_timestamp) * 1000 : new Date(item.end).getTime();
+    const startTs = new Date(item.startTime).getTime();
+    const stopTs = new Date(item.stopTime).getTime();
     const durationMin = Math.max(5, Math.round((stopTs - startTs) / 60000));
     const url = xtream.getCatchupStreamUrl(activeChannel.stream_id, new Date(startTs), durationMin);
     setShowCatchupDrawer(false);
@@ -967,12 +965,12 @@ export const MpvPlayer: React.FC<MpvPlayerProps> = ({
               </div>
             ) : (
               catchupPrograms.map((item, idx) => {
-                const startTs = item.start_timestamp ? Number(item.start_timestamp) * 1000 : new Date(item.start).getTime();
-                const stopTs = item.stop_timestamp ? Number(item.stop_timestamp) * 1000 : new Date(item.end).getTime();
+                const startTs = new Date(item.startTime).getTime();
+                const stopTs = new Date(item.stopTime).getTime();
                 const isPast = stopTs < Date.now();
                 return (
                   <div
-                    key={item.id || idx}
+                    key={`${item.startTime}-${item.title}-${idx}`}
                     className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-cyan-400/40 hover:bg-white/[0.06] transition-all group"
                   >
                     <div className="flex justify-between items-start mb-1">
