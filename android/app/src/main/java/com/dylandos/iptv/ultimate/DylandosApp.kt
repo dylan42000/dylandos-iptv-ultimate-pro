@@ -137,6 +137,9 @@ class DylandosApp : Application(), Configuration.Provider, ImageLoaderFactory {
             Timber.i("Guide display timezone: ${TimeFormatter.displayTimeZone().id}")
         }
 
+        // Start MainThreadWatchdog to detect UI thread stalls > 2s
+        com.dylandos.iptv.ultimate.di.MainThreadWatchdog().start()
+
         // B3: guarded crash reporting — blank SENTRY_DSN (default) means the SDK is never
         // initialized and nothing leaves the device. Set SENTRY_DSN to enable remote crashes.
         if (BuildConfig.SENTRY_DSN.isNotBlank()) {

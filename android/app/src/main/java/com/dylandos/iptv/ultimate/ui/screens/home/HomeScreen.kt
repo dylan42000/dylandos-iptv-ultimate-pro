@@ -911,10 +911,9 @@ private fun TopNavButton(item: QuickAccessItem, onClick: () -> Unit) {
 @Composable
 private fun QuickAccessCard(item: QuickAccessItem, onClick: () -> Unit) {
     Card(
-        onClick = onClick,
         modifier = Modifier
             .aspectRatio(1.6f)
-            .tvCardFocusable(),
+            .tvCardFocusable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = BgSurface2),
         shape = RoundedCornerShape(8.dp),
         border = CardDefaults.outlinedCardBorder().copy(width = 0.dp)

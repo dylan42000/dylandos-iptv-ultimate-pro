@@ -411,7 +411,7 @@ class LibVlcEngine @Inject constructor(
                         }
                     }
                 }
-                delay(500)
+                delay(750)
             }
         }
     }

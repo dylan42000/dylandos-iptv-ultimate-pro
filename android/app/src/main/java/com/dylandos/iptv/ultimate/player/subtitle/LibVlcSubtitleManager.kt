@@ -1,6 +1,7 @@
 package com.dylandos.iptv.ultimate.player.subtitle
 
 import android.util.Log
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.videolan.libvlc.MediaPlayer
 
@@ -12,9 +13,12 @@ import org.videolan.libvlc.MediaPlayer
  *
  * Track ID -1 = subtitles disabled.
  */
-class LibVlcSubtitleManager(private val mediaPlayer: MediaPlayer) {
+class LibVlcSubtitleManager(
+    private val mediaPlayer: MediaPlayer,
+    private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+) {
 
-    private val _currentTrackId  = MutableStateFlow(-1)
+    private val _currentTrackId = MutableStateFlow(mediaPlayer.spuTrack)
     val currentTrackId: StateFlow<Int> = _currentTrackId.asStateFlow()
 
     private val _availableTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
@@ -23,30 +27,63 @@ class LibVlcSubtitleManager(private val mediaPlayer: MediaPlayer) {
     private val _settings = MutableStateFlow(SubtitleSettings())
     val settings: StateFlow<SubtitleSettings> = _settings.asStateFlow()
 
+    private var pollJob: Job? = null
+
+    init {
+        refreshTracks()
+    }
+
     /** Call after media has started playing to enumerate SPU/CC tracks. */
     fun refreshTracks() {
         val spuCount = mediaPlayer.spuTracksCount
         Log.d(TAG, "SPU track count: $spuCount")
-        if (spuCount <= 0) { _availableTracks.value = emptyList(); return }
+        if (spuCount <= 0) {
+            _availableTracks.value = emptyList()
+            return
+        }
 
-        val tracks = mediaPlayer.spuTracks?.mapNotNull { t ->
+        val rawTracks = mediaPlayer.spuTracks?.toList() ?: emptyList()
+        val tracks = rawTracks.map { t ->
+            val trackName = t.name?.takeIf { it.isNotBlank() } ?: "Track ${t.id}"
             SubtitleTrack(
-                id       = t.id,
-                name     = t.name ?: "Track ${t.id}",
-                type     = detectType(t.name ?: ""),
-                language = extractLanguage(t.name ?: "")
+                id = t.id,
+                name = formatDisplayName(t.id, trackName),
+                type = detectType(trackName),
+                language = extractLanguage(trackName)
             )
-        } ?: emptyList()
+        }
 
         _availableTracks.value = tracks
-        Log.d(TAG, "Tracks: ${tracks.map { "${it.id}:${it.name}" }}")
+        _currentTrackId.value = mediaPlayer.spuTrack
+        Log.d(TAG, "Tracks updated: ${tracks.map { "${it.id}:${it.name}" }} (current=${_currentTrackId.value})")
+    }
+
+    /**
+     * Periodically polls for tracks right after playback starts.
+     * MPEG-TS closed captions (CEA-608/708) are demuxed 1-3 seconds into playback.
+     */
+    fun startTrackDiscovery(durationMs: Long = 6_000L) {
+        pollJob?.cancel()
+        pollJob = coroutineScope.launch {
+            val startTime = System.currentTimeMillis()
+            while (isActive && System.currentTimeMillis() - startTime < durationMs) {
+                refreshTracks()
+                if (_availableTracks.value.isNotEmpty()) {
+                    delay(1_500L)
+                } else {
+                    delay(600L)
+                }
+            }
+        }
     }
 
     /** Enable a track by ID. Pass -1 to disable. */
     fun selectTrack(trackId: Int) {
         val result = mediaPlayer.setSpuTrack(trackId)
-        if (result) _currentTrackId.value = trackId
-        Log.d(TAG, "setSpuTrack($trackId) → $result")
+        if (result || trackId == -1) {
+            _currentTrackId.value = trackId
+        }
+        Log.d(TAG, "setSpuTrack($trackId) → $result (active=${mediaPlayer.spuTrack})")
     }
 
     fun disableSubtitles() = selectTrack(-1)
@@ -67,6 +104,16 @@ class LibVlcSubtitleManager(private val mediaPlayer: MediaPlayer) {
         setSubtitleDelay(settings.delayMs)
     }
 
+    private fun formatDisplayName(id: Int, name: String): String {
+        return when {
+            name.contains("608", ignoreCase = true) -> "CC (CEA-608) - $name"
+            name.contains("708", ignoreCase = true) -> "CC (CEA-708) - $name"
+            name.contains("teletext", ignoreCase = true) -> "Teletext - $name"
+            name.contains("dvb", ignoreCase = true) -> "DVB Subtitle - $name"
+            else -> name
+        }
+    }
+
     private fun detectType(name: String): SubtitleTrackType = when {
         name.contains("CC", ignoreCase = true) ||
         name.contains("caption", ignoreCase = true) ||
@@ -77,8 +124,12 @@ class LibVlcSubtitleManager(private val mediaPlayer: MediaPlayer) {
     }
 
     private fun extractLanguage(name: String): String {
-        val langs = listOf("English", "Spanish", "French", "German", "Portuguese")
+        val langs = listOf("English", "Spanish", "French", "German", "Portuguese", "Italian", "Russian", "Arabic")
         return langs.firstOrNull { name.contains(it, ignoreCase = true) } ?: ""
+    }
+
+    fun release() {
+        pollJob?.cancel()
     }
 
     companion object { private const val TAG = "LibVlcSubtitleMgr" }

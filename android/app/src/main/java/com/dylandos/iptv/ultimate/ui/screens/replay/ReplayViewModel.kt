@@ -19,7 +19,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** Provider-hosted catch-up only. It deliberately never starts the local live-buffer timeshift. */
+/**
+ * Provider-hosted Catch-Up / Replay ViewModel.
+ * Loads channels with tvArchive == 1 and provides up to 7 days of past programmes.
+ */
 @HiltViewModel
 class ReplayViewModel @Inject constructor(
     private val xtreamRepository: XtreamRepository,
@@ -42,51 +45,79 @@ class ReplayViewModel @Inject constructor(
         }
         _state.value = _state.value.copy(enabled = true, loadingChannels = true, error = null)
         val channels = xtreamRepository.getLiveStreams().getOrElse {
-            _state.value = _state.value.copy(loadingChannels = false, error = "Could not load Replay channels: ${it.message ?: "network error"}")
+            _state.value = _state.value.copy(
+                loadingChannels = false,
+                error = "Could not load Replay channels: ${it.message ?: "network error"}"
+            )
             return@launch
         }.filter { it.tvArchive == 1 }
             .sortedWith(compareBy<XtreamChannel> { !isUsEnPriorityLabel(it.name) }.thenBy { it.name.lowercase() })
+
         _state.value = _state.value.copy(
-            channels = channels,
+            allChannels = channels,
+            channels = filterChannels(channels, _state.value.searchQuery),
             loadingChannels = false,
             extension = prefs[SettingsViewModel.KEY_STREAM_FORMAT] ?: "ts"
         )
-        if (channels.isNotEmpty()) selectChannel(channels.first())
+        if (channels.isNotEmpty() && _state.value.selectedChannel == null) {
+            selectChannel(channels.first())
+        }
+    }
+
+    fun onSearchQueryChanged(query: String) {
+        _state.value = _state.value.copy(
+            searchQuery = query,
+            channels = filterChannels(_state.value.allChannels, query)
+        )
+    }
+
+    private fun filterChannels(list: List<XtreamChannel>, query: String): List<XtreamChannel> {
+        if (query.isBlank()) return list
+        return list.filter { it.name.contains(query, ignoreCase = true) }
     }
 
     fun selectChannel(channel: XtreamChannel) {
         programmeLoadJob?.cancel()
         programmeLoadJob = viewModelScope.launch {
-        _state.value = _state.value.copy(selectedChannel = channel, loadingPrograms = true, programs = emptyList(), error = null)
-        programmeCache[channel.streamId]?.takeIf { !it.isExpired() }?.let { cached ->
-            _state.value = _state.value.copy(loadingPrograms = false, programs = cached.programmes)
-            return@launch
-        }
-        // The complete table contains historical rows; short EPG often only includes now/next.
-        val allResult = xtreamRepository.getSimpleDataTable(channel.streamId)
-        val all = allResult.getOrElse { fullTableError ->
-            // A few panels deny the full table but still expose a limited short EPG. Keeping
-            // this fallback prevents a failed full-table request from blanking the Replay UI.
-            xtreamRepository.getShortEpg(channel.streamId, limit = 100).getOrElse {
+            _state.value = _state.value.copy(
+                selectedChannel = channel,
+                loadingPrograms = true,
+                programs = emptyList(),
+                error = null
+            )
+            programmeCache[channel.streamId]?.takeIf { !it.isExpired() }?.let { cached ->
                 _state.value = _state.value.copy(
                     loadingPrograms = false,
-                    error = "Replay listing unavailable for this channel: ${fullTableError.message ?: "provider did not respond"}"
+                    programs = cached.programmes
                 )
                 return@launch
             }
-        }
-        val nowSeconds = System.currentTimeMillis() / 1000L
-        val programmes = all.filter { it.stopTimestamp in 1 until nowSeconds }
+
+            // The full data table contains historical rows up to 7 days
+            val allResult = xtreamRepository.getSimpleDataTable(channel.streamId)
+            val all = allResult.getOrElse { fullTableError ->
+                xtreamRepository.getShortEpg(channel.streamId, limit = 100).getOrElse {
+                    _state.value = _state.value.copy(
+                        loadingPrograms = false,
+                        error = "Replay listing unavailable for this channel: ${fullTableError.message ?: "provider did not respond"}"
+                    )
+                    return@launch
+                }
+            }
+            val nowSeconds = System.currentTimeMillis() / 1000L
+            val sevenDaysAgoSec = nowSeconds - (7 * 24 * 3600L)
+
+            val programmes = all.filter { it.stopTimestamp in (sevenDaysAgoSec + 1) until nowSeconds }
                 .sortedByDescending { it.startTimestamp }
                 .take(MAX_PROGRAMS_PER_CHANNEL)
-        programmeCache[channel.streamId] = CachedProgrammes(programmes)
-        _state.value = _state.value.copy(loadingPrograms = false, programs = programmes)
+
+            programmeCache[channel.streamId] = CachedProgrammes(programmes)
+            _state.value = _state.value.copy(loadingPrograms = false, programs = programmes)
         }
     }
 
     /**
-     * Opaque route token.  The first three fields are the guide-corrected values used by
-     * old routes; fields four/five preserve the provider's original archive clock.
+     * Opaque route token for timeshift playback.
      */
     fun buildReplayToken(program: XtreamEpgProgram): String {
         val durationMinutes = ((program.stopTimestamp - program.startTimestamp + 59L) / 60L).coerceAtLeast(1L)
@@ -105,7 +136,7 @@ class ReplayViewModel @Inject constructor(
         xtreamRepository.pendingStreamTitle = "$channelName - ${program.title.ifBlank { "Programme" }}"
     }
 
-    private companion object { const val MAX_PROGRAMS_PER_CHANNEL = 250 }
+    private companion object { const val MAX_PROGRAMS_PER_CHANNEL = 350 }
 }
 
 private data class CachedProgrammes(
@@ -119,9 +150,11 @@ data class ReplayUiState(
     val enabled: Boolean = true,
     val loadingChannels: Boolean = true,
     val loadingPrograms: Boolean = false,
+    val allChannels: List<XtreamChannel> = emptyList(),
     val channels: List<XtreamChannel> = emptyList(),
     val selectedChannel: XtreamChannel? = null,
     val programs: List<XtreamEpgProgram> = emptyList(),
+    val searchQuery: String = "",
     val extension: String = "ts",
     val error: String? = null
 )

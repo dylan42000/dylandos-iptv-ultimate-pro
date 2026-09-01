@@ -1,0 +1,27 @@
+{
+  "versionCode": 99,
+  "version": "5.2.8",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "PERFORMANCE: World-class low-latency media pipeline tuning with 750ms position polling, low-overhead LibVLC audio resampling, and release quiet logging to eliminate lag on Firestick.",
+    "WATCHDOG: Real-time EngineWatchdog detects black-screen stalls and decoder freezes with automatic multi-tiered recovery and FormatFallbackChain container rotation.",
+    "REPLAY / CATCH-UP: Overhauled 7-day provider archive support by channel with instant search, date grouping, duration pills, and multi-variant endpoint resolution.",
+    "CLOSED CAPTIONS: Unified Closed Captions and Subtitles across all 3 engines (LibVLC, MPV, Media3) supporting live CEA-608/708, DVB, Teletext, and VOD softsubs with zero performance overhead.",
+    "TOUCH SCREEN SUPPORT: Full mobile phone and tablet touch interactivity for Android Premium — responsive category rails, cards, navigation, and player gestures.",
+    "DVR & TIMESHIFT: Hardened background recording service, dynamic Timeshift ring buffer calculations, and fail-safe seek boundary protection.",
+    "REMOTES & DEBUG: Extended Firestick remote shortcut mapping (Captions, Guide, Info, Color keys) and live diagnostic overlay."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_SIGNED_FIRESTICK_APK_DIRECT_URL",
+      "apkSize": 70878140,
+      "sha256": "3CE95A89ABEF9BE5D4445632EB68ECFA7694B42B46FE1D47AB28D8EA16BA2722"
+    },
+    "premium": {
+      "apkUrl": "REPLACE_WITH_SIGNED_ANDROID_APK_DIRECT_URL",
+      "apkSize": 71920326,
+      "sha256": "C453102868A4B6EB63B37A39696DC4211EE1FBB91C4193D24AA8D2807F60513D"
+    }
+  }
+}

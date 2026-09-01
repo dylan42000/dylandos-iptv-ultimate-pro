@@ -3,7 +3,7 @@
 This folder is the static product and beta-access site for the current release tracks:
 
 - Windows: `5.2.0`
-- Android / Fire TV: `5.2.7`
+- Android / Fire TV: `5.2.8`
 
 It accurately describes the player as a bring-your-own-provider app; it does not offer IPTV channels, playlists, subscriptions, or access to copyrighted content.
 

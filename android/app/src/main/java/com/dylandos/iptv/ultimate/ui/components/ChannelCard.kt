@@ -2,6 +2,9 @@ package com.dylandos.iptv.ultimate.ui.components
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,13 +17,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.ColorPainter
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.painter.ColorPainter
 import coil.compose.AsyncImage
+import com.dylandos.iptv.ultimate.ui.focus.isRemoteConfirmKey
 import com.dylandos.iptv.ultimate.ui.theme.DylandosPalette
-import androidx.compose.ui.graphics.graphicsLayer
 
 /**
  * ChannelCard — Premium live-TV channel card for the DYLANDOS grid.
@@ -74,6 +79,8 @@ fun ChannelCard(
         label = "liveDotAlpha",
     )
 
+    val interactionSource = remember { MutableInteractionSource() }
+
     GlassCard(
         modifier = modifier
             .graphicsLayer {
@@ -81,6 +88,18 @@ fun ChannelCard(
                 scaleY = scale
             }
             .onFocusChanged { isFocused = it.isFocused }
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+            .focusable(interactionSource = interactionSource)
+            .onKeyEvent { event ->
+                if (event.isRemoteConfirmKey()) {
+                    onClick()
+                    true
+                } else false
+            }
             .width(200.dp)
             .height(140.dp),
         isFocused = isFocused,

@@ -126,14 +126,16 @@ fun Modifier.tvFocusable(
  * Slightly larger scale pop to lift card off the grid.
  */
 fun Modifier.tvCardFocusable(
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    onClick: (() -> Unit)? = null
 ): Modifier = tvFocusable(
     focusRequester = focusRequester,
     borderColor    = null,   // → LocalDylandosColors.current.accent
     bgFocused      = null,   // → LocalDylandosColors.current.focusBgStrong
     scaleOnFocus   = 1.05f,
     borderWidth    = 2.5.dp,
-    cornerRadius   = 10.dp
+    cornerRadius   = 10.dp,
+    onClick        = onClick
 )
 
 /**
@@ -144,7 +146,8 @@ fun Modifier.tvCardFocusable(
  */
 fun Modifier.tvButtonFocusable(
     focusRequester: FocusRequester? = null,
-    interactionSource: MutableInteractionSource? = null
+    interactionSource: MutableInteractionSource? = null,
+    onClick: (() -> Unit)? = null
 ): Modifier = composed {
     val themeColors = LocalDylandosColors.current
     this.tvFocusable(
@@ -154,7 +157,8 @@ fun Modifier.tvButtonFocusable(
         bgFocused         = themeColors.focusBgButton,
         scaleOnFocus      = 1.04f,
         borderWidth       = 2.5.dp,
-        cornerRadius      = 8.dp
+        cornerRadius      = 8.dp,
+        onClick           = onClick
     )
 }
 

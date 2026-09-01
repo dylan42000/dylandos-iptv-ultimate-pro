@@ -1,6 +1,7 @@
 package com.dylandos.iptv.ultimate.player
 
 import android.content.Context
+import com.dylandos.iptv.ultimate.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.videolan.libvlc.LibVLC
 import javax.inject.Inject
@@ -38,13 +39,13 @@ class LibVlcFactory @Inject constructor(
             "--http-reconnect",
             "--http-continuous",
             "--aout=opensles",
-            "--audio-resampler=soxr",
+            if (BuildConfig.DEBUG) "-v" else "--quiet",
+            "--audio-resampler=ugly",
             "--codec=mediacodec_ndk,iomx,all",
             "--mediacodec-dr",
             "--no-mediacodec-adaptive-playback",
             "--codec-threads=2",
             "--no-stats",
-            "-vv",
         ).also { opts ->
             if (enableDeinterlacing) {
                 opts.add("--deinterlace=1")
@@ -65,13 +66,13 @@ class LibVlcFactory @Inject constructor(
             "--sout-mux-caching=$cachingMs",
             "--http-reconnect",
             "--aout=opensles",
-            "--audio-resampler=soxr",
+            if (BuildConfig.DEBUG) "-v" else "--quiet",
+            if (isLowEndDevice) "--audio-resampler=ugly" else "--audio-resampler=soxr",
             "--codec=mediacodec_ndk,iomx,all",
             "--mediacodec-dr",
             "--no-mediacodec-adaptive-playback",
             "--codec-threads=2",
             "--no-stats",
-            "-vv",
         ).also { opts ->
             if (audioNormalization) {
                 opts.add("--audio-filter=normvol")
