@@ -145,10 +145,33 @@ fun GuideScreen(
     dvrViewModel: DvrViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     val dvrState by dvrViewModel.uiState.collectAsState()
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    var showDayPicker by remember { mutableStateOf(false) }
+    if (showDayPicker) {
+        AlertDialog(
+            onDismissRequest = { showDayPicker = false },
+            title = { Text("Choose guide day") },
+            text = {
+                Column {
+                    repeat(7) { offset ->
+                        val zone = com.dylandos.iptv.ultimate.ui.util.TimeFormatter.displayTimeZone()
+                        val day = java.util.Calendar.getInstance(zone).apply { add(java.util.Calendar.DAY_OF_YEAR, offset) }
+                        TextButton(onClick = {
+                            viewModel.showTime(day.timeInMillis)
+                            showDayPicker = false
+                        }) {
+                            Text(if (offset == 0) "Today" else SimpleDateFormat("EEE, MMM d", java.util.Locale.getDefault()).apply { timeZone = zone }.format(day.time))
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showDayPicker = false }) { Text("Close") } }
+        )
+    }
 
     // Dynamic row height from Settings
     val rowHeight = rowHeightForMode(uiState.rowHeightMode)
@@ -254,6 +277,7 @@ fun GuideScreen(
         val nextProgram: XtreamEpgProgram?
     )
     var programDialog by remember { mutableStateOf<ProgramDialogData?>(null) }
+    var selectedTimeMs by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
     var guideRecordMenu by remember { mutableStateOf<GuideRecordMenuData?>(null) }
     var recordingChannelToPick by remember { mutableStateOf<XtreamChannel?>(null) }
     var pendingScheduleConflict by remember {
@@ -358,6 +382,14 @@ fun GuideScreen(
 
     fun openRecordMenuForFocusedChannel() {
         val channel = uiState.filteredChannels.getOrNull(uiState.focusedChannelIndex) ?: return
+        val selected = uiState.epgData[channel.streamId].orEmpty().firstOrNull {
+            selectedTimeMs in (it.startTimestamp * 1000L) until (it.stopTimestamp * 1000L)
+        }
+        if (selected != null) {
+            programDialog = ProgramDialogData(selected.title, channel.name, channel.streamId,
+                selected.startTimestamp * 1000L, selected.stopTimestamp * 1000L, selected.hasArchive > 0 || channel.tvArchive > 0)
+            return
+        }
         val nowSec = System.currentTimeMillis() / 1000L
         val programs = uiState.epgData[channel.streamId].orEmpty().sortedBy { it.startTimestamp }
         val current = programs.firstOrNull { nowSec in it.startTimestamp until it.stopTimestamp }
@@ -418,7 +450,20 @@ fun GuideScreen(
                             endMs = dlg.endMs,
                             closeDialog = { programDialog = null }
                         )
-                    }) { Text("Schedule This Program (${dlg.title})", color = AccentSecondary) }
+                    }, enabled = dlg.endMs > nowMs) { Text("Schedule This Program (${dlg.title})", color = AccentSecondary) }
+                    if (dlg.startMs > nowMs) {
+                        TextButton(onClick = {
+                            val enabled = androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+                            if (enabled) com.dylandos.iptv.ultimate.workers.ProgramReminderWorker.schedule(context, dlg.channelId, dlg.channelName, dlg.title, dlg.startMs, dlg.endMs)
+                            android.widget.Toast.makeText(context, if (enabled) "Reminder set for two minutes before the program. Sleeping devices may deliver it later." else "Enable app notifications to receive reminders.", android.widget.Toast.LENGTH_LONG).show()
+                            programDialog = null
+                        }) { Text("Remind me") }
+                        TextButton(onClick = {
+                            androidx.work.WorkManager.getInstance(context).cancelUniqueWork(com.dylandos.iptv.ultimate.workers.ProgramReminderWorker.key(dlg.channelId, dlg.startMs))
+                            android.widget.Toast.makeText(context, "Reminder canceled", android.widget.Toast.LENGTH_SHORT).show()
+                            programDialog = null
+                        }) { Text("Cancel reminder") }
+                    }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(onClick = {
@@ -672,13 +717,34 @@ fun GuideScreen(
     }
     val totalGridWidthDp = DP_PER_MINUTE * windowMinutes
 
+    fun moveProgram(direction: Int) {
+        val channel = uiState.filteredChannels.getOrNull(uiState.focusedChannelIndex)
+        val programs = uiState.epgData[channel?.streamId].orEmpty().sortedBy { it.startTimestamp }
+        val current = programs.firstOrNull { selectedTimeMs in (it.startTimestamp * 1000L) until (it.stopTimestamp * 1000L) }
+        val target = if (direction > 0) {
+            current?.let { it.stopTimestamp * 1000L + 1 }
+                ?: programs.firstOrNull { it.startTimestamp * 1000L > selectedTimeMs }?.let { it.startTimestamp * 1000L + 1 }
+                ?: (selectedTimeMs + 30 * 60_000L)
+        } else {
+            current?.let { it.startTimestamp * 1000L - 1 }
+                ?: programs.lastOrNull { it.stopTimestamp * 1000L < selectedTimeMs }?.let { it.stopTimestamp * 1000L - 1 }
+                ?: (selectedTimeMs - 30 * 60_000L)
+        }
+        val now = System.currentTimeMillis()
+        selectedTimeMs = target.coerceIn(now - now % 3_600_000L, now + 7 * 86_400_000L - 1)
+        if (selectedTimeMs !in uiState.windowStartMs until uiState.windowEndMs) viewModel.showTime(selectedTimeMs)
+        scope.launch {
+            val minutes = ((selectedTimeMs - uiState.windowStartMs) / 60_000L).toInt().coerceAtLeast(0)
+            hScrollState.scrollTo(with(density) { (DP_PER_MINUTE * minutes).toPx().toInt() }.coerceIn(0, hScrollState.maxValue))
+        }
+    }
+
     // Auto-scroll to NOW on first load / when window shifts
     LaunchedEffect(uiState.windowStartMs) {
         val nowMs = System.currentTimeMillis()
-        if (nowMs >= uiState.windowStartMs) {
-            val minutesFromStart = ((nowMs - uiState.windowStartMs) / 60_000L).coerceAtLeast(0L)
-            val targetPx = with(density) { (DP_PER_MINUTE * minutesFromStart.toInt()).toPx().toInt() }
-            hScrollState.scrollTo((targetPx - with(density) { 120.dp.toPx() }.toInt()).coerceAtLeast(0))
+        if (selectedTimeMs !in uiState.windowStartMs until uiState.windowEndMs) {
+            selectedTimeMs = if (nowMs in uiState.windowStartMs until uiState.windowEndMs) nowMs else uiState.windowStartMs
+            hScrollState.scrollTo(0)
         }
     }
 
@@ -744,30 +810,18 @@ fun GuideScreen(
                     // Individual program cells handle ENTER first (consuming it) so this
                     // only fires when focus is on the grid container itself.
                     Key.DirectionCenter, Key.Enter -> {
-                        val ch = uiState.filteredChannels.getOrNull(uiState.focusedChannelIndex)
-                        if (ch != null) {
-                            viewModel.setActiveChannel(uiState.focusedChannelIndex)
-                            navController.navigateSafe(
-                                Screen.Player.createRoute("live", ch.streamId.toString(), "ts")
-                            )
-                        }
+                        openRecordMenuForFocusedChannel()
                         true  // ALWAYS consume — prevents Firestick from firing Home/Back
                     }
                     // D-pad LEFT/RIGHT: scroll the time axis by one 30-minute slot.
                     // Category pills consume LEFT/RIGHT themselves (returning true) so this
                     // only fires when focus is on the program grid area — exactly what we want.
                     Key.DirectionLeft -> {
-                        scope.launch {
-                            val delta = with(density) { (DP_PER_MINUTE * 30).toPx().toInt() }
-                            hScrollState.scrollTo((hScrollState.value - delta).coerceAtLeast(0))
-                        }
+                        moveProgram(-1)
                         true
                     }
                     Key.DirectionRight -> {
-                        scope.launch {
-                            val delta = with(density) { (DP_PER_MINUTE * 30).toPx().toInt() }
-                            hScrollState.scrollTo((hScrollState.value + delta).coerceAtMost(hScrollState.maxValue))
-                        }
+                        moveProgram(1)
                         true
                     }
                     Key.Menu -> {
@@ -862,19 +916,10 @@ fun GuideScreen(
             }
         }
 
-        GuideCommandDeck(
-            channel = uiState.filteredChannels.getOrNull(uiState.focusedChannelIndex),
-            programs = uiState.filteredChannels.getOrNull(uiState.focusedChannelIndex)
-                ?.let { uiState.epgData[it.streamId] }
-                ?: emptyList(),
-            channelIndex = uiState.focusedChannelIndex,
-            channelCount = uiState.filteredChannels.size,
-            windowLabel = formatWindowLabel(uiState.windowStartMs),
-            guideItemCount = uiState.epgData.values.sumOf { it.size },
-            matchLabel = if (uiState.epgQueriedChannels > 0) {
-                "EPG match ${uiState.epgMatchedChannels}/${uiState.epgQueriedChannels}"
-            } else null
-        )
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { showDayPicker = true }) { Text("Choose day") }
+            Text("Left/right: programs · OK/Menu: options", color = Color.LightGray, fontSize = 12.sp)
+        }
 
         when {
             uiState.isLoading -> {
@@ -1059,6 +1104,10 @@ fun GuideScreen(
                                     isFavorite = channel.streamId in uiState.favoriteChannelIds,
                                     rowHeight = rowHeight,
                                     showChannelNumber = uiState.showChannelNumbers,
+                                    onProgramOptions = {
+                                        viewModel.focusChannelByStreamId(channel.streamId)
+                                        openRecordMenuForFocusedChannel()
+                                    },
                                     onFavorite = { viewModel.toggleFavoriteChannel(channel) },
                                     onRecord = {
                                         val accounts = dvrState.recordingAccounts
@@ -1109,6 +1158,7 @@ fun GuideScreen(
                                 rowHeight           = rowHeight,
                                 dpPerMinute         = DP_PER_MINUTE,
                                 focusedChannelIndex = uiState.focusedChannelIndex,
+                                selectedTimeMs      = selectedTimeMs,
                                 modifier            = Modifier.weight(1f),
                                 onProgramSelected   = { channelId, channelName, title, startMs, endMs, hasArchive ->
                                     viewModel.focusChannelByStreamId(channelId)
@@ -1288,6 +1338,7 @@ private fun ChannelInfoCell(
     isFavorite: Boolean,
     rowHeight: Dp,
     showChannelNumber: Boolean = true,
+    onProgramOptions: () -> Unit,
     onFavorite: () -> Unit,
     onRecord: () -> Unit,
     onPlay: () -> Unit
@@ -1317,8 +1368,8 @@ private fun ChannelInfoCell(
             .onKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                 when (event.key) {
-                    Key.DirectionCenter, Key.Enter -> { onPlay(); true }
-                    Key.Menu -> { onFavorite(); true }
+                    Key.DirectionCenter, Key.Enter -> { onProgramOptions(); true }
+                    Key.Menu -> { onProgramOptions(); true }
                     else -> false
                 }
             }

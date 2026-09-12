@@ -17,8 +17,13 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.lazy.rememberLazyListState
+import com.dylandos.iptv.ultimate.ui.navigation.navigateSafe
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -61,10 +66,51 @@ fun SearchScreen(
     val favorites by viewModel.favorites.collectAsState()
     val customLists by viewModel.customLists.collectAsState()
     var pendingListItem by remember { mutableStateOf<PendingListItem?>(null) }
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val resultListState = rememberLazyListState()
+    var returnKey by rememberSaveable(query, selectedTab) { mutableStateOf<String?>(null) }
+    val returnFocus = remember { FocusRequester() }
+    val searchFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (returnKey == null) {
+            withFrameNanos { }
+            runCatching { searchFocus.requestFocus() }
+        }
+    }
+    LaunchedEffect(results, selectedTab) {
+        val target = returnKey ?: return@LaunchedEffect
+        if (results.isLoading) return@LaunchedEffect
+        val keys = buildList {
+            if ((selectedTab == 0 || selectedTab == 1) && results.channels.isNotEmpty()) {
+                add("channels_header")
+                addAll(results.channels.map { "ch_${it.streamId}" })
+            }
+            if ((selectedTab == 0 || selectedTab == 2) && results.movies.isNotEmpty()) {
+                add("movies_header")
+                addAll(results.movies.map { "mv_${it.streamId}" })
+            }
+            if ((selectedTab == 0 || selectedTab == 3) && results.series.isNotEmpty()) {
+                add("series_header")
+                addAll(results.series.map { "sr_${it.seriesId}" })
+            }
+        }
+        val index = keys.indexOf(target)
+        if (index < 0) return@LaunchedEffect
+        resultListState.scrollToItem(index)
+        repeat(12) {
+            withFrameNanos { }
+            if (runCatching { returnFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+            kotlinx.coroutines.delay(50)
+        }
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
+    val resultsTabFocus = remember { FocusRequester() }
+    fun finishSearchEntry() {
+        keyboardController?.hide()
+        if (query.isNotBlank()) runCatching { resultsTabFocus.requestFocus() }
+    }
 
     LaunchedEffect(Unit) { viewModel.loadContent() }
     LaunchedEffect(Unit) {
@@ -100,7 +146,7 @@ fun SearchScreen(
                         },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() }),
+                        keyboardActions = KeyboardActions(onSearch = { finishSearchEntry() }, onDone = { finishSearchEntry() }, onNext = { finishSearchEntry() }),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Accent,
                             unfocusedBorderColor = BgSurface2,
@@ -112,6 +158,7 @@ fun SearchScreen(
                         ),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier
+                            .focusRequester(searchFocus)
                             .fillMaxWidth()
                             .onKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown &&
@@ -119,8 +166,8 @@ fun SearchScreen(
                                      event.key == Key.DirectionCenter ||
                                      event.key == Key.MediaPlayPause)
                                 ) {
-                                    keyboardController?.hide()
-                                    false // let the TextField process the key too
+                                    finishSearchEntry()
+                                    true
                                 } else false
                             }
                     )
@@ -145,6 +192,7 @@ fun SearchScreen(
                 ) {
                     tabs.forEachIndexed { idx, (label, count) ->
                         Tab(
+                            modifier = if (idx == selectedTab) Modifier.focusRequester(resultsTabFocus) else Modifier,
                             selected = selectedTab == idx,
                             onClick = { selectedTab = idx },
                             text = {
@@ -213,8 +261,8 @@ fun SearchScreen(
                 else -> {
                     LazyColumn(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .dylandosFocusGroup(trapExit = false),
+                            .fillMaxSize(),
+                        state = resultListState,
                         contentPadding = PaddingValues(vertical = 8.dp)
                     ) {
                         val showChannels = selectedTab == 0 || selectedTab == 1
@@ -226,12 +274,14 @@ fun SearchScreen(
                             items(results.channels, key = { "ch_${it.streamId}" }) { ch ->
                                 ChannelResultRow(
                                     channel = ch,
+                                    modifier = if (returnKey == "ch_${ch.streamId}") Modifier.focusRequester(returnFocus) else Modifier,
                                     isFavorite = "live:${ch.streamId}" in favorites,
                                     onToggleFavorite = { viewModel.toggleFavorite(ch.streamId, "live", ch.name) },
                                     onAddToList = { pendingListItem = PendingListItem(ch.streamId, "live", ch.name, ch.streamIcon) }
                                 ) {
+                                    returnKey = "ch_${ch.streamId}"
                                     viewModel.prepareChannelPlayback(ch)
-                                    navController.navigate(
+                                    navController.navigateSafe(
                                         Screen.Player.createRoute("live", ch.streamId.toString(), "ts")
                                     )
                                 }
@@ -242,13 +292,15 @@ fun SearchScreen(
                             items(results.movies, key = { "mv_${it.streamId}" }) { movie ->
                                 MovieResultRow(
                                     movie = movie,
+                                    modifier = if (returnKey == "mv_${movie.streamId}") Modifier.focusRequester(returnFocus) else Modifier,
                                     isFavorite = "vod:${movie.streamId}" in favorites,
                                     onToggleFavorite = { viewModel.toggleFavorite(movie.streamId, "vod", movie.name) },
                                     onAddToList = { pendingListItem = PendingListItem(movie.streamId, "vod", movie.name, movie.streamIcon) }
                                 ) {
+                                    returnKey = "mv_${movie.streamId}"
                                     // Stash the search hit so MovieDetail never depends on full-catalog cache.
                                     viewModel.prepareMovieDetail(movie)
-                                    navController.navigate(Screen.MovieDetail.createRoute(movie.streamId))
+                                    navController.navigateSafe(Screen.MovieDetail.createRoute(movie.streamId))
                                 }
                             }
                         }
@@ -257,14 +309,16 @@ fun SearchScreen(
                             items(results.series, key = { "sr_${it.seriesId}" }) { s ->
                                 SeriesResultRow(
                                     series = s,
+                                    modifier = if (returnKey == "sr_${s.seriesId}") Modifier.focusRequester(returnFocus) else Modifier,
                                     isFavorite = "series:${s.seriesId}" in favorites,
                                     onToggleFavorite = { viewModel.toggleFavorite(s.seriesId, "series", s.name) },
                                     onAddToList = { pendingListItem = PendingListItem(s.seriesId, "series", s.name, s.cover) }
                                 ) {
+                                    returnKey = "sr_${s.seriesId}"
                                     // Open Series detail with full Xtream metadata (plot/cast/seasons).
                                     // Prefer SeriesDetail route over Series grid + pending-open race.
                                     viewModel.setAutoOpenSeries(s)
-                                    navController.navigate(Screen.SeriesDetail.createRoute(s.seriesId))
+                                    navController.navigateSafe(Screen.SeriesDetail.createRoute(s.seriesId))
                                 }
                             }
                         }
@@ -314,11 +368,11 @@ private fun SearchSectionHeader(label: String, icon: androidx.compose.ui.graphic
 }
 
 @Composable
-private fun ChannelResultRow(channel: XtreamChannel, isFavorite: Boolean, onToggleFavorite: () -> Unit, onAddToList: () -> Unit, onClick: () -> Unit) {
+private fun ChannelResultRow(channel: XtreamChannel, isFavorite: Boolean, onToggleFavorite: () -> Unit, onAddToList: () -> Unit, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(if (isFocused) FocusBgStrong else Color.Transparent)
             .then(if (isFocused) Modifier.border(1.dp, Accent) else Modifier)
@@ -330,7 +384,6 @@ private fun ChannelResultRow(channel: XtreamChannel, isFavorite: Boolean, onTogg
                 }
             }
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-            .focusable(interactionSource = interactionSource)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -355,7 +408,7 @@ private fun ChannelResultRow(channel: XtreamChannel, isFavorite: Boolean, onTogg
 }
 
 @Composable
-private fun MovieResultRow(movie: XtreamMovie, isFavorite: Boolean, onToggleFavorite: () -> Unit, onAddToList: () -> Unit, onClick: () -> Unit) {
+private fun MovieResultRow(movie: XtreamMovie, isFavorite: Boolean, onToggleFavorite: () -> Unit, onAddToList: () -> Unit, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val metaBits = buildList {
@@ -364,7 +417,7 @@ private fun MovieResultRow(movie: XtreamMovie, isFavorite: Boolean, onToggleFavo
         movie.containerExtension?.takeIf { it.isNotBlank() }?.let { add(it.uppercase()) }
     }.joinToString(" • ")
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(if (isFocused) FocusBgStrong else Color.Transparent)
             .then(if (isFocused) Modifier.border(1.dp, Accent) else Modifier)
@@ -376,7 +429,6 @@ private fun MovieResultRow(movie: XtreamMovie, isFavorite: Boolean, onToggleFavo
                 }
             }
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-            .focusable(interactionSource = interactionSource)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -408,11 +460,11 @@ private fun MovieResultRow(movie: XtreamMovie, isFavorite: Boolean, onToggleFavo
 }
 
 @Composable
-private fun SeriesResultRow(series: XtreamSeries, isFavorite: Boolean, onToggleFavorite: () -> Unit, onAddToList: () -> Unit, onClick: () -> Unit) {
+private fun SeriesResultRow(series: XtreamSeries, isFavorite: Boolean, onToggleFavorite: () -> Unit, onAddToList: () -> Unit, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(if (isFocused) FocusBgStrong else Color.Transparent)
             .then(if (isFocused) Modifier.border(1.dp, Accent) else Modifier)
@@ -424,7 +476,6 @@ private fun SeriesResultRow(series: XtreamSeries, isFavorite: Boolean, onToggleF
                 }
             }
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-            .focusable(interactionSource = interactionSource)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -475,4 +526,3 @@ private fun ListAction(onAddToList: () -> Unit) {
         Icon(Icons.Default.PlaylistAdd, contentDescription = "Add to My List", tint = TextSecondary)
     }
 }
-

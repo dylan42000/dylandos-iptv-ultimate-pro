@@ -112,9 +112,9 @@ class RecordingService : Service() {
         val streamUrl: String = ""               // original stream URL (used by stale watchdog to restart)
     )
 
-    private val slots = mutableMapOf<String, RecordingSlot>()  // recordingId → slot
-    private val autoStopJobs = mutableMapOf<String, Job>()
-    private val startRepairAttempts = mutableMapOf<String, Int>()
+    private val slots = java.util.concurrent.ConcurrentHashMap<String, RecordingSlot>()
+    private val autoStopJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
+    private val startRepairAttempts = java.util.concurrent.ConcurrentHashMap<String, Int>()
     /** Service-scoped coroutine scope — cancelled in onDestroy() to prevent leaks. */
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -309,7 +309,8 @@ class RecordingService : Service() {
                 return
             }
             if (freeBytes in 1 until MIN_FREE_BYTES_TO_START) {
-                Timber.w("DVR: low storage reported — ${freeBytes / 1024 / 1024}MB free on ${outputDir.absolutePath}; attempting recording after writable probe")
+                finishRecordingAsFailed(id, channelName, url, null, "Not enough free DVR storage")
+                return
             } else if (freeBytes <= 0L) {
                 Timber.w("DVR: storage stats unknown for ${outputDir.absolutePath}; probe passed, attempting recording")
             }
@@ -742,7 +743,7 @@ class RecordingService : Service() {
      * This fixes the DVR freeze described in the deep-dive guide where recordings
      * silently stop writing data after ~1 minute without error feedback.
      */
-    private val watchdogJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
+    private val watchdogJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
 
     private fun startStaleWatchdog(id: String) {
         watchdogJobs[id]?.cancel()
@@ -865,13 +866,19 @@ class RecordingService : Service() {
     }
 
     private fun failRecording(id: String, slot: RecordingSlot, reason: String) {
+        // Only the owner may release native resources; stop/watchdog can race.
+        if (!slots.remove(id, slot)) return
         Timber.e("DVR failed [$id]: $reason (${slot.channelName})")
         startRepairAttempts.remove(id)
-        slots.remove(id)?.let { removed ->
-            removed.sizeJob?.cancel()
-            removed.downloadJob?.cancel()
-        }
+        autoStopJobs.remove(id)?.cancel()
+        slot.sizeJob?.cancel()
+        slot.downloadJob?.cancel()
         stopStaleWatchdog(id)
+        if (slot.isTeeMode) PlayerRecordingBridge.postTeeStop(id)
+        runCatching { slot.mediaPlayer?.stop() }
+        runCatching { slot.mediaPlayer?.release() }
+        runCatching { slot.libVLC?.release() }
+        runCatching { slot.pfd?.close() }
         runCatching { File(slot.outputPath).takeIf { it.length() <= 0L }?.delete() }
         finishRecordingAsFailed(id, slot.channelName, slot.streamUrl, slot.outputPath, reason)
         if (slots.isEmpty()) stopSelf() else updateNotification()

@@ -1,6 +1,6 @@
 {
   "name": "dylandos-iptv-ultimate",
-  "version": "5.2.0",
+  "version": "5.2.9",
   "description": "DYLANDOS IPTV ULTIMATE — World-Class IPTV Player for Windows",
   "main": "electron/main.cjs",
   "author": "Dylandos",

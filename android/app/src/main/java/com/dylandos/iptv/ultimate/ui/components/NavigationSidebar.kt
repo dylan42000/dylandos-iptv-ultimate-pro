@@ -2,6 +2,8 @@ package com.dylandos.iptv.ultimate.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +27,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.dylandos.iptv.ultimate.ui.screens.settings.SettingsViewModel
 import com.dylandos.iptv.ultimate.ui.screens.settings.dataStore
 import com.dylandos.iptv.ultimate.ui.theme.DylandosPalette
@@ -95,7 +98,8 @@ fun NavigationSidebar(
                     )
                 )
             )
-            .padding(vertical = 24.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -121,7 +125,7 @@ fun NavigationSidebar(
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             // Main navigation items
             navItems.filter { it.route != "replay" || replayEnabled }.forEach { item ->
@@ -199,7 +203,7 @@ private fun SidebarItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
+            .padding(horizontal = if (isExpanded) 12.dp else 4.dp)
             .height(52.dp)
             .graphicsLayer {
                 scaleX = scale
@@ -209,22 +213,28 @@ private fun SidebarItem(
                 if (focusRequester != null) Modifier.focusRequester(focusRequester)
                 else Modifier
             )
-            .clickable { onClick() }
             .clip(RoundedCornerShape(12.dp))
             .background(bgColor)
             .onFocusChanged {
                 isFocused = it.isFocused
                 if (it.isFocused) onFocused()
             }
-            .padding(horizontal = 16.dp),
+            .clickable { onClick() }
+            .padding(horizontal = if (isExpanded) 12.dp else 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(
             imageVector        = if (isSelected) selectedIcon else icon,
             contentDescription = label,
             tint               = iconColor,
             modifier           = Modifier.size(24.dp),
         )
+        if (!isExpanded) {
+            Text(label, color = iconColor, fontSize = 10.sp,
+                style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        }
+        }
 
         // Label — only visible when expanded
         if (isExpanded) {

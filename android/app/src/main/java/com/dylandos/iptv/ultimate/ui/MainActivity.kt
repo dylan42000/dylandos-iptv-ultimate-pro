@@ -48,13 +48,16 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_OPEN_DVR = "com.dylandos.iptv.ultimate.action.OPEN_DVR"
+        const val ACTION_OPEN_GUIDE = "com.dylandos.iptv.ultimate.action.OPEN_GUIDE"
     }
 
     private var openDvrRequest by mutableStateOf(false)
+    private var openGuideRequest by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         openDvrRequest = intent?.action == ACTION_OPEN_DVR
+        openGuideRequest = intent?.action == ACTION_OPEN_GUIDE
 
         Timber.d("MainActivity created")
 
@@ -86,6 +89,8 @@ class MainActivity : ComponentActivity() {
                 ) {
                     DylandosApp(
                         openDvrRequest = openDvrRequest,
+                        openGuideRequest = openGuideRequest,
+                        onGuideRequestConsumed = { openGuideRequest = false },
                         onDvrRequestConsumed = { openDvrRequest = false }
                     )
                 }
@@ -97,6 +102,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == ACTION_OPEN_DVR) openDvrRequest = true
+        if (intent.action == ACTION_OPEN_GUIDE) openGuideRequest = true
     }
 
     /**
@@ -120,6 +126,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun DylandosApp(
+    openGuideRequest: Boolean = false,
+    onGuideRequestConsumed: () -> Unit = {},
     openDvrRequest: Boolean = false,
     onDvrRequestConsumed: () -> Unit = {}
 ) {
@@ -133,6 +141,12 @@ fun DylandosApp(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val onMainMenu = backStackEntry?.destination?.route == "home"
     var showExitForRecordingDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(openGuideRequest) {
+        if (openGuideRequest) {
+            navController.navigate(Screen.Guide.route) { launchSingleTop = true }
+            onGuideRequestConsumed()
+        }
+    }
 
     LaunchedEffect(openDvrRequest) {
         if (openDvrRequest) {

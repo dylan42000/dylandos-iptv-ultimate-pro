@@ -170,6 +170,12 @@ function getFFmpegPath() {
   return ffmpegPath;
 }
 
+let libraryQueue = Promise.resolve();
+function withRecordingLibrary(action) {
+  const result = libraryQueue.then(action);
+  libraryQueue = result.catch(() => {});
+  return result;
+}
 async function loadRecordingLibrary() {
   let library = [];
   try {
@@ -181,6 +187,24 @@ async function loadRecordingLibrary() {
     library = [];
   }
 
+  // Older disk imports used only the first seven filename bytes as the ID.
+  // Migrate those entries too, otherwise existing same-channel recordings still
+  // collide in the UI even after new imports use full-path hashes.
+  let repairedIds = false;
+  const seenIds = new Set();
+  library = library.map((item, index) => {
+    let id = item.id;
+    if (!id || String(id).startsWith('rec_disk_') || seenIds.has(id)) {
+      id = `rec_disk_${require('crypto').createHash('sha256')
+        .update(item.outputPath ? path.resolve(item.outputPath) : `missing_${index}`).digest('hex').slice(0, 24)}`;
+      if (seenIds.has(id)) id += `_${index}`;
+    }
+    seenIds.add(id);
+    if (id !== item.id) { repairedIds = true; return { ...item, id }; }
+    return item;
+  });
+  if (repairedIds) await saveRecordingLibrary(library);
+
   // Auto-discover existing .ts, .mp4, and .mkv files in DVR output folder
   try {
     const dvrDir = getDvrDir();
@@ -191,7 +215,7 @@ async function loadRecordingLibrary() {
       for (const file of files) {
         if (!file.match(/\.(ts|mp4|mkv)$/i)) continue;
         const fullPath = path.resolve(path.join(dvrDir, file));
-        if (!knownPaths.has(fullPath)) {
+        if (!knownPaths.has(fullPath) && ![...recordings.values()].some(r => path.resolve(r.outputPath) === fullPath)) {
           try {
             const st = await fs.stat(fullPath);
             if (st.size > 0) {
@@ -199,7 +223,7 @@ async function loadRecordingLibrary() {
               const chName = nameParts.length > 1 ? nameParts[0] : 'Channel';
               const progTitle = nameParts.length > 1 ? nameParts.slice(1).join(' - ') : file;
               library.push({
-                id: `rec_disk_${Buffer.from(file).toString('hex').slice(0, 14)}`,
+                id: `rec_disk_${require('crypto').createHash('sha256').update(fullPath).digest('hex').slice(0, 24)}`,
                 channelName: chName,
                 programTitle: progTitle,
                 streamUrl: '',
@@ -230,18 +254,22 @@ async function loadRecordingLibrary() {
 async function saveRecordingLibrary(library) {
   await ensureDataDir();
   const filePath = path.join(DATA_DIR, DVR_LIBRARY_FILE);
-  await fs.writeFile(filePath, JSON.stringify(library, null, 2), 'utf8');
+  const tempPath = filePath + '.tmp';
+  await fs.writeFile(tempPath, JSON.stringify(library, null, 2), 'utf8');
+  await fs.rename(tempPath, filePath);
 }
 
 async function saveRecordingToLibrary(meta) {
+ return withRecordingLibrary(async () => {
   const library = await loadRecordingLibrary();
-  const idx = library.findIndex((item) => item.id === meta.id);
+  const idx = library.findIndex((item) => item.id === meta.id || item.outputPath === meta.outputPath);
   if (idx >= 0) {
     library[idx] = meta;
   } else {
     library.unshift(meta);
   }
   await saveRecordingLibrary(library.slice(0, 2000));
+ });
 }
 
 async function ensureDataDir() {
@@ -987,7 +1015,7 @@ function setupIPC() {
     const safeProgram = sanitizeFileName(programTitle, 'Recording');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const formatExt = (appSettings.dvrFormat === 'mp4' ? 'mp4' : appSettings.dvrFormat === 'mkv' ? 'mkv' : 'ts');
-    const filename = `${safeChannel} - ${safeProgram} - ${stamp}.${formatExt}`;
+    const filename = `${safeChannel.slice(0, 60)} - ${safeProgram.slice(0, 80)} - ${stamp}-${recordingId.slice(-8)}.${formatExt}`;
     const outputPath = path.join(outputDir, filename);
 
     const startedAt = Date.now();
@@ -1004,66 +1032,10 @@ function setupIPC() {
       size: 0,
     };
 
-    const isHttp = streamUrl.startsWith('http://') || streamUrl.startsWith('https://');
-    const isHls = streamUrl.includes('.m3u8') || streamUrl.includes('/hls/') || streamUrl.includes('m3u8');
-    const userAgent = appSettings.liveUserAgent || 'IPTVSmartersPro';
-
-    const args = [
-      '-hide_banner',
-      '-loglevel', 'warning',
-      '-y',
-    ];
-
-    if (isHttp) {
-      args.push(
-        '-user_agent', userAgent,
-        '-headers', `User-Agent: ${userAgent}\r\n`
-      );
-      if (!isHls) {
-        args.push(
-          '-reconnect', '1',
-          '-reconnect_at_eof', '1',
-          '-reconnect_streamed', '1',
-          '-reconnect_delay_max', '10',
-          '-timeout', '30000000',
-          '-rw_timeout', '30000000'
-        );
-      } else {
-        args.push(
-          '-timeout', '30000000',
-          '-rw_timeout', '30000000'
-        );
-      }
-    }
-
-    args.push(
-      '-probesize', '10000000',
-      '-analyzeduration', '10000000',
-      '-fflags', '+genpts+discardcorrupt'
-    );
-
-    // Sometimes Stalker wraps URLs in 'ffmpeg http://...' - clean it
-    const cleanUrl = streamUrl.startsWith('ffmpeg ') ? streamUrl.replace(/^ffmpeg\s+/, '') : streamUrl;
-
-    args.push(
-      '-i', cleanUrl,
-      '-map', '0:v?',
-      '-map', '0:a?',
-      '-ignore_unknown',
-      '-c', 'copy'
-    );
-
-    if (typeof durationSeconds === 'number' && durationSeconds > 0) {
-      args.push('-t', String(durationSeconds));
-    }
-
-    if (formatExt === 'mp4') {
-      args.push('-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+faststart', outputPath);
-    } else if (formatExt === 'mkv') {
-      args.push('-f', 'matroska', outputPath);
-    } else {
-      args.push('-f', 'mpegts', outputPath);
-    }
+    const args = require('./dvrArgs.cjs').buildRecordingArgs({
+      streamUrl, userAgent: appSettings.liveUserAgent || 'IPTVSmartersPro',
+      durationSeconds, formatExt, outputPath,
+    });
 
     let ffmpegProc;
 
@@ -1080,6 +1052,10 @@ function setupIPC() {
     }
 
     let lastStderr = '';
+    // A stop command racing FFmpeg exit can emit EPIPE asynchronously.
+    ffmpegProc.stdin?.on('error', () => {});
+    let settleStartup;
+    const startup = new Promise(resolve => { settleStartup = resolve; });
     ffmpegProc.stderr?.on('data', (chunk) => {
       const text = String(chunk || '').trim();
       if (!text) return;
@@ -1092,17 +1068,8 @@ function setupIPC() {
 
     ffmpegProc.on('error', (err) => {
       console.error(`[DVR ${recordingId}] FFmpeg process error:`, err.message);
-      const active = recordings.get(recordingId);
-      if (active) {
-        recordings.delete(recordingId);
-        if (active.progressTimer) clearInterval(active.progressTimer);
-      }
-      win?.webContents.send('dvr:completed', {
-        recordingId,
-        success: false,
-        error: `FFmpeg process error: ${err.message}`,
-        meta,
-      });
+      lastStderr = `FFmpeg process error: ${err.message}`;
+      // close follows error, and owns persistence + the single completion event.
     });
 
     recordings.set(recordingId, {
@@ -1137,17 +1104,25 @@ function setupIPC() {
         size = 0;
       }
 
+      settleStartup(size > 0 ? { success: true } : {
+        success: false, error: lastStderr || `FFmpeg exited before writing media (code ${code})`,
+      });
+
       const elapsedSeconds = Math.max(1, Math.round((Date.now() - active.startMs) / 1000));
       const completedMeta = {
         ...active.meta,
         status: size > 0 ? 'completed' : 'error',
         size,
-        durationSeconds: active.meta.durationSeconds ?? elapsedSeconds,
+        durationSeconds: elapsedSeconds,
         stopReason: active.stopRequested ? 'user' : (code === 0 ? 'finished' : 'ffmpeg-error'),
         error: size === 0 ? (lastStderr || `FFmpeg exited with code ${code}`) : undefined,
       };
 
-      await saveRecordingToLibrary(completedMeta);
+      try {
+        await saveRecordingToLibrary(completedMeta);
+      } catch (err) {
+        completedMeta.error = `Recording library could not be saved: ${err.message}`;
+      }
 
       win?.webContents.send('dvr:completed', {
         recordingId,
@@ -1164,6 +1139,11 @@ function setupIPC() {
       try { bytes = (await fs.stat(outputPath)).size; } catch { /* writer may not have opened yet */ }
       active.lastBytes = bytes;
       active.meta.size = bytes;
+      if (bytes > 0) settleStartup({ success: true });
+      if (bytes === 0 && Date.now() - active.startMs > 45_000) {
+        lastStderr = 'No stream bytes received within 45 seconds. Check provider connections and stream availability.';
+        active.process.kill();
+      }
       win?.webContents.send('dvr:progress', {
         recordingId,
         bytesWritten: bytes,
@@ -1173,8 +1153,11 @@ function setupIPC() {
     const activeSlot = recordings.get(recordingId);
     if (activeSlot) activeSlot.progressTimer = progressTimer;
 
+    const startupResult = await startup;
+    if (!startupResult.success) return { ...startupResult, recordingId };
     return {
       success: true,
+      completed: !recordings.has(recordingId),
       recordingId,
       meta,
       activeCount: recordings.size,
@@ -1241,12 +1224,9 @@ function setupIPC() {
     };
   });
 
-  ipcMain.handle('dvr:list-library', async () => {
-    const library = await loadRecordingLibrary();
-    return library;
-  });
+  ipcMain.handle('dvr:list-library', async () => withRecordingLibrary(loadRecordingLibrary));
 
-  ipcMain.handle('dvr:delete', async (_e, { recordingId, deleteFile = false } = {}) => {
+  ipcMain.handle('dvr:delete', async (_e, { recordingId, deleteFile = false } = {}) => withRecordingLibrary(async () => {
     if (!recordingId) {
       return { success: false, error: 'recordingId is required' };
     }
@@ -1265,7 +1245,7 @@ function setupIPC() {
     }
 
     return { success: true };
-  });
+  }));
 
   ipcMain.handle('dvr:set-output-dir', async (_e, dir) => {
     if (typeof dir !== 'string' || !dir.trim()) {

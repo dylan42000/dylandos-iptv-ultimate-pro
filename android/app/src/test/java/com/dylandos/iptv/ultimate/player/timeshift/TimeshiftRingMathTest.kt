@@ -57,10 +57,10 @@ class TimeshiftRingMathTest {
     }
 
     @Test
-    fun `window mode still respects the floor on tiny disks`() {
-        // Need 1.125 GB, free/4 = 64 MB -> floor 512 MB wins.
+    fun `tiny disks leave half the space available for DVR`() {
+        // The nominal 512MB floor must never overfill a 256MB disk.
         assertEquals(
-            TimeshiftRingMath.MIN_RING_BYTES,
+            128 * MB,
             TimeshiftRingMath.computeRingMaxBytes(256 * MB, windowMinutes = 60)
         )
     }

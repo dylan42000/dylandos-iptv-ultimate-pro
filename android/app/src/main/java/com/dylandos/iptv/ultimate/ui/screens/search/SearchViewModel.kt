@@ -87,6 +87,7 @@ class SearchViewModel @Inject constructor(
     private var allMovies: List<XtreamMovie> = emptyList()
     private var allSeries: List<XtreamSeries> = emptyList()
     private var contentLoaded = false
+    private var contentLoading = false
 
     init {
         @OptIn(FlowPreview::class)
@@ -99,7 +100,8 @@ class SearchViewModel @Inject constructor(
     fun setQuery(q: String) { _query.value = q }
 
     fun loadContent() {
-        if (contentLoaded) return
+        if (contentLoaded || contentLoading) return
+        contentLoading = true
         viewModelScope.launch {
             _results.value = _results.value.copy(isLoading = true)
             try {
@@ -112,24 +114,30 @@ class SearchViewModel @Inject constructor(
                 contentLoaded = true
                 _results.value = _results.value.copy(isLoading = false)
                 if (_query.value.isNotBlank()) performSearch(_query.value)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _results.value = _results.value.copy(isLoading = false, error = e.message)
+            } finally {
+                contentLoading = false
             }
         }
     }
 
-    private fun performSearch(query: String) {
+    private suspend fun performSearch(query: String) {
         if (query.isBlank()) {
             _results.value = SearchResults()
             return
         }
         val q = query.lowercase()
-        _results.value = SearchResults(
-            channels = allChannels.filter { it.name.lowercase().contains(q) }.take(50),
-            movies   = allMovies.filter { it.name.lowercase().contains(q) }.take(50),
-            series   = allSeries.filter { it.name.lowercase().contains(q) }.take(50),
+        val matches = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { SearchResults(
+            channels = allChannels.asSequence().filter { it.name.contains(q, ignoreCase = true) }.distinctBy { it.streamId }.take(50).toList(),
+            movies   = allMovies.asSequence().filter { it.name.contains(q, ignoreCase = true) }.distinctBy { it.streamId }.take(50).toList(),
+            series   = allSeries.asSequence().filter { it.name.contains(q, ignoreCase = true) }.distinctBy { it.seriesId }.take(50).toList(),
             isLoading = false
-        )
+        ) }
+        if (_query.value.trim() != query.trim()) return
+        _results.value = matches
         // S-023: Save to recent searches list (keep last 10 unique, most recent first)
         if (query.length >= 2) {
             val current = _recentSearches.value.toMutableList()

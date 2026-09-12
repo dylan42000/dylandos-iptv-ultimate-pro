@@ -8,9 +8,8 @@ package com.dylandos.iptv.ultimate.player.timeshift
  * rewind window. No Android dependencies — safe for JVM unit tests.
  *
  * Rules (Firestick-first: USB flash shared with DVR, 2 GB RAM, ~2.5 Mbps typical stream):
- *  - Never below MIN_RING_BYTES (512 MB) unless the disk physically can't hold it
- *    (the caller's write-probe in `PlayerScreen.resolveTimeshiftDirectory` already
- *    refuses targets that cannot accommodate the ring plus its safety margin).
+ *  - Prefer MIN_RING_BYTES (512 MB), but leave half of known remaining free space
+ *    available for DVR and the OS, even when that requires a smaller ring.
  *  - Auto mode: use up to 1/8 of free space, capped at MAX_RING_BYTES (2 GB).
  *    This intentionally leaves plenty of space and write bandwidth for DVR.
  *  - Window mode: size for exactly `windowMinutes` of rewind at the estimated
@@ -49,13 +48,16 @@ object TimeshiftRingMath {
         val requested = if (windowMinutes > 0) {
             // Window mode: exact size for the requested rewind, safety-capped at
             // one quarter of free space so we never fill the drive.
-            val need = windowMinutes.toLong() * 60L * bitrateBps.coerceAtLeast(1L) / 8L
+            val need = (windowMinutes.toDouble() * 60.0 * bitrateBps.coerceAtLeast(1L) / 8.0)
+                .coerceAtMost(MAX_RING_BYTES.toDouble()).toLong()
             minOf(need, freeBytes / FREE_SPACE_SAFETY_FACTOR)
         } else {
             // Auto mode: 1/8 of free space, never above the ceiling.
             maxOf(MIN_RING_BYTES, freeBytes / FREE_SPACE_FRACTION)
         }
-        return requested.coerceIn(MIN_RING_BYTES, MAX_RING_BYTES)
+        // Leave at least half the remaining disk available for DVR and the OS.
+        val safeCap = minOf(MAX_RING_BYTES, (freeBytes / 2L).coerceAtLeast(1L))
+        return requested.coerceAtLeast(MIN_RING_BYTES).coerceAtMost(safeCap)
     }
 
     /**

@@ -75,7 +75,7 @@ class DvrSchedulerClass {
     }
     // Re-arm timers for pending recordings
     this._schedules
-      .filter(s => s.status === 'pending' && s.startTimeMs > Date.now())
+      .filter(s => s.status === 'pending' && s.endTimeMs + s.postBufferSecs * 1000 > Date.now())
       .forEach(s => this.armTimer(s));
   }
 
@@ -223,8 +223,9 @@ class DvrSchedulerClass {
     }
 
     const timer = setTimeout(() => {
-      this.startRecording(recording);
-    }, msUntilStart);
+      this.timers.delete(recording.id);
+      this.armTimer(recording);
+    }, Math.min(msUntilStart, 2_147_483_647));
 
     this.timers.set(recording.id, timer);
   }
@@ -282,9 +283,7 @@ class DvrSchedulerClass {
       }
 
       const durationSecs =
-        (recording.endTimeMs - recording.startTimeMs) / 1000
-        + recording.preBufferSecs
-        + recording.postBufferSecs;
+        Math.max(1, (recording.endTimeMs + recording.postBufferSecs * 1000 - Date.now()) / 1000);
 
       const payload = {
         recordingId: recording.id,
@@ -302,7 +301,7 @@ class DvrSchedulerClass {
         throw new Error(result.error || 'dvr:start failed');
       }
 
-      this.updateStatus(recording.id, 'recording');
+      if (recording.status === 'pending') this.updateStatus(recording.id, result?.completed ? 'completed' : 'recording');
     } catch (err) {
       console.error('[dvrScheduler] Failed to start recording:', err);
       this.updateStatus(recording.id, 'failed');

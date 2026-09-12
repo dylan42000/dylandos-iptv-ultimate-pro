@@ -94,7 +94,7 @@ fun SettingsScreen(
     // letting the process die back to the Firestick home screen.
     var tabContentError by remember { mutableStateOf<String?>(null) }
 
-    val tabLabels = listOf("Account", "Playback", "Filter", "EPG", "Appearance", "Subtitles", "System", "LibVLC", "Performance", "DVR", "Categories", "Parental", "About")
+    val tabLabels = listOf("Account", "Playback", "Filter", "EPG", "Appearance", "Subtitles", "System", "LibVLC", "Performance", "DVR", "Categories", "Parental", "About", "Ratings & language")
     val tabCount  = tabLabels.size
     val tabFocusRequesters = remember(tabCount) { List(tabCount) { FocusRequester() } }
     val tabInteractions    = remember(tabCount) { List(tabCount) { MutableInteractionSource() } }
@@ -230,6 +230,7 @@ fun SettingsScreen(
                         10 -> CategoriesTab(state, viewModel)
                         11 -> ParentalTab(state, viewModel)
                         12 -> AboutTab(updateViewModel)
+                        13 -> com.dylandos.iptv.ultimate.ui.components.MediaDiscoverySettings()
                     }
                 }
             }
@@ -1239,7 +1240,7 @@ private fun PlaybackTab(state: SettingsUiState, viewModel: SettingsViewModel) {
                 "It is separate from Provider Replay above, so turn this off if a stream is unstable. " +
                 "FireStick media Rewind, Fast Forward, and Play/Pause keys are mapped directly. " +
                 "Window = how far back you can rewind (Auto sizes the disk ring to free space, " +
-                "max 8 GB)."
+                "max 2 GB). Rewind covers only the time buffered since tuning in; the available duration also depends on stream bitrate."
         )
 
         SectionHeader("Playback Engine")

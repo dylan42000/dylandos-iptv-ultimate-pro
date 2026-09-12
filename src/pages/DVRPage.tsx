@@ -714,7 +714,7 @@ export const DVRPage: React.FC<DVRPageProps> = ({
       setSelectedChannelId(null);
       setChannelSearch('');
       await refreshAll();
-      setTab('active');
+      setTab(result.completed ? 'library' : 'active');
     } catch (err: any) {
       setError(err.message || 'Failed to start recording');
     } finally {

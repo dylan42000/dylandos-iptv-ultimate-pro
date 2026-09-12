@@ -135,6 +135,7 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
         setRecordingId(null);
         setBytesWritten(0);
         setElapsedSeconds(0);
+        if (data.success === false) toastError(data.error || data.meta?.error || 'Recording failed — see DVR library');
       }
     };
 
@@ -202,10 +203,11 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
         throw new Error(result?.error || 'Failed to start recording');
       }
 
-      setIsRecording(true);
-      setRecordingId(result.recordingId || null);
+      setIsRecording(!result.completed);
+      recordingIdRef.current = result.completed ? null : result.recordingId || null;
+      setRecordingId(recordingIdRef.current);
       setShowDialog(false);
-      success(`Recording started: ${title}`);
+      success(`Recording ${result.completed ? 'saved' : 'started'}: ${title}`);
     } catch (err: any) {
       const msg = err.message || 'Failed to start recording';
       setError(msg);
@@ -233,6 +235,7 @@ export const RecordingButton: React.FC<RecordingButtonProps> = ({
   return (
     <>
       <button
+        disabled={isStarting}
         onClick={(e) => {
           e.stopPropagation();
           handleQuickRecord();

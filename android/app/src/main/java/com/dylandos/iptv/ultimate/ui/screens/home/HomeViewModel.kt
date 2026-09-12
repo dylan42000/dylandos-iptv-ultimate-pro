@@ -46,6 +46,8 @@ data class HomeContent(
     val topMovies: List<XtreamMovie> = emptyList(),
     val topSeries: List<XtreamSeries> = emptyList(),
     val recentMovies: List<XtreamMovie> = emptyList(),
+    val moviesLabel: String = "Recently added movies",
+    val seriesLabel: String = "Recently added series",
     val liveStatus: HomeSectionStatus = HomeSectionStatus.IDLE,
     val moviesStatus: HomeSectionStatus = HomeSectionStatus.IDLE,
     val seriesStatus: HomeSectionStatus = HomeSectionStatus.IDLE,
@@ -56,7 +58,8 @@ data class HomeContent(
 class HomeViewModel @Inject constructor(
     private val xtreamRepository: XtreamRepository,
     private val contentFilterRepository: ContentFilterRepository,
-    private val watchHistoryDao: WatchHistoryDao
+    private val watchHistoryDao: WatchHistoryDao,
+    private val ratings: com.dylandos.iptv.ultimate.data.network.MediaRatingsRepository
 ) : ViewModel() {
 
     private val _stats = MutableStateFlow(HomeStats())
@@ -65,10 +68,14 @@ class HomeViewModel @Inject constructor(
     private val _content = MutableStateFlow(HomeContent())
     val content: StateFlow<HomeContent> = _content.asStateFlow()
     private var loadJob: Job? = null
+    private var discoverySignature = ""
 
     fun loadHomeData(force: Boolean = false) {
         if (loadJob?.isActive == true) return
-        if (!force && _stats.value.isLoaded && _content.value.isLoaded) return
+        val signature = ratings.preferences.getString("language", "en").orEmpty() + ratings.preferences.getString("tmdb_key", "").orEmpty().hashCode()
+        val refresh = force || signature != discoverySignature
+        discoverySignature = signature
+        if (!refresh && _stats.value.isLoaded && _content.value.isLoaded) return
         loadJob = viewModelScope.launch {
             if (!xtreamRepository.isConnected) {
                 _stats.value = HomeStats(
@@ -84,18 +91,18 @@ class HomeViewModel @Inject constructor(
 
             _stats.update {
                 it.copy(
-                    liveLoading = force || _content.value.liveStatus != HomeSectionStatus.LOADED,
-                    moviesLoading = force || _content.value.moviesStatus != HomeSectionStatus.LOADED,
-                    seriesLoading = force || _content.value.seriesStatus != HomeSectionStatus.LOADED,
+                    liveLoading = refresh || _content.value.liveStatus != HomeSectionStatus.LOADED,
+                    moviesLoading = refresh || _content.value.moviesStatus != HomeSectionStatus.LOADED,
+                    seriesLoading = refresh || _content.value.seriesStatus != HomeSectionStatus.LOADED,
                     isLoading = true,
                     error = null
                 )
             }
 
             supervisorScope {
-                if (force || _content.value.liveStatus != HomeSectionStatus.LOADED) launch { loadLiveSection() }
-                if (force || _content.value.moviesStatus != HomeSectionStatus.LOADED) launch { loadMoviesSection() }
-                if (force || _content.value.seriesStatus != HomeSectionStatus.LOADED) launch { loadSeriesSection() }
+                if (refresh || _content.value.liveStatus != HomeSectionStatus.LOADED) launch { loadLiveSection() }
+                if (refresh || _content.value.moviesStatus != HomeSectionStatus.LOADED) launch { loadMoviesSection() }
+                if (refresh || _content.value.seriesStatus != HomeSectionStatus.LOADED) launch { loadSeriesSection() }
             }
 
             val allLoaded = listOf(
@@ -137,7 +144,7 @@ class HomeViewModel @Inject constructor(
             .onSuccess { raw ->
                 val filtered = withContext(Dispatchers.Default) { contentFilterRepository.filterMovies(raw) }
                 val rails = withContext(Dispatchers.Default) {
-                    val top = filtered.sortedByDescending { it.rating5Based }.take(HOME_RAIL_LIMIT)
+                    val top = filtered.sortedByDescending { it.added?.toLongOrNull() ?: 0L }.take(HOME_RAIL_LIMIT)
                     val recent = filtered.asSequence()
                         .filter { !it.added.isNullOrBlank() }
                         .sortedByDescending { it.added }
@@ -148,12 +155,19 @@ class HomeViewModel @Inject constructor(
                 _content.update {
                     it.copy(
                         topMovies = rails.first,
+                        moviesLabel = "Recently added movies",
                         recentMovies = rails.second,
                         featured = emptyList(),
                         moviesStatus = HomeSectionStatus.LOADED
                     )
                 }
                 _stats.update { it.copy(movies = filtered.size, moviesLoading = false) }
+                try {
+                    val discovered = ratings.discover("movie")
+                    val ranked = withContext(Dispatchers.Default) { ratings.matchAvailable(discovered, filtered) { it.name } }
+                    if (ranked.isNotEmpty()) _content.update { it.copy(topMovies = ranked, moviesLabel = "Top rated recent movies · TMDB") }
+                } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { /* The provider catalog remains usable offline. */ }
                 Timber.d("Home Movies loaded: %d", filtered.size)
             }
             .onFailure { error ->
@@ -169,10 +183,16 @@ class HomeViewModel @Inject constructor(
             .onSuccess { raw ->
                 val filtered = withContext(Dispatchers.Default) { contentFilterRepository.filterSeries(raw) }
                 val rail = withContext(Dispatchers.Default) {
-                    filtered.sortedByDescending { it.rating5Based }.take(HOME_RAIL_LIMIT)
+                    filtered.sortedByDescending { it.lastModified?.toLongOrNull() ?: 0L }.take(HOME_RAIL_LIMIT)
                 }
-                _content.update { it.copy(topSeries = rail, seriesStatus = HomeSectionStatus.LOADED) }
+                _content.update { it.copy(topSeries = rail, seriesLabel = "Recently added series", seriesStatus = HomeSectionStatus.LOADED) }
                 _stats.update { it.copy(series = filtered.size, seriesLoading = false) }
+                try {
+                    val discovered = ratings.discover("tv")
+                    val ranked = withContext(Dispatchers.Default) { ratings.matchAvailable(discovered, filtered) { it.name } }
+                    if (ranked.isNotEmpty()) _content.update { it.copy(topSeries = ranked, seriesLabel = "Top rated recent series · TMDB") }
+                } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { }
                 Timber.d("Home Series loaded: %d", filtered.size)
             }
             .onFailure { error ->

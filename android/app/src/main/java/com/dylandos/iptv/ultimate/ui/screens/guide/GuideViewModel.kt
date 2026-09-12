@@ -28,6 +28,9 @@ import com.dylandos.iptv.ultimate.ui.screens.settings.dataStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,7 +89,7 @@ class GuideViewModel @Inject constructor(
         private const val KEY_VERTICAL_LIST_INDEX = "guide_vertical_list_index"
         private const val KEY_VERTICAL_LIST_OFFSET = "guide_vertical_list_offset"
         private const val KEY_HORIZONTAL_SCROLL_OFFSET = "guide_horizontal_scroll_offset"
-        private const val LOAD_TIMEOUT_MS = 30_000L
+        private const val LOAD_TIMEOUT_MS = 60_000L
         val KEY_XMLTV_LAST_FETCH_MS = longPreferencesKey("xmltv_last_fetch_ms")
         val KEY_EPG_THIRD_PARTY_ENABLED = booleanPreferencesKey("epg_third_party_enabled")
         val KEY_EPG_THIRD_PARTY_URL = stringPreferencesKey("epg_third_party_url")
@@ -302,19 +305,25 @@ class GuideViewModel @Inject constructor(
         load()
     }
 
+    private var guideLoadJob: Job? = null
+
     fun load() {
+        if (guideLoadJob?.isActive == true) return
         if (!xtreamRepository.isConnected) {
             _uiState.value = _uiState.value.copy(
                 error = "Not connected. Configure credentials in Settings."
             )
             return
         }
-        viewModelScope.launch {
+        guideLoadJob = viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
                 val loaded = withTimeout(LOAD_TIMEOUT_MS) {
-                    val liveCategories = xtreamRepository.getLiveCategories().getOrDefault(emptyList())
-                    val liveChannels = xtreamRepository.getLiveStreams().getOrDefault(emptyList())
+                    val (liveCategories, liveChannels) = coroutineScope {
+                        val categories = async { xtreamRepository.getLiveCategories().getOrThrow() }
+                        val channels = async { xtreamRepository.getLiveStreams().getOrThrow() }
+                        categories.await() to channels.await()
+                    }
 
                     withContext(Dispatchers.Default) {
                         val categories = contentFilterRepository.filterCategories(liveCategories)
@@ -384,6 +393,8 @@ class GuideViewModel @Inject constructor(
                     isLoading = false
                 )
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Timber.e(e, "Guide load failed")
                 _uiState.value = _uiState.value.copy(
@@ -397,6 +408,7 @@ class GuideViewModel @Inject constructor(
     fun selectCategory(categoryId: String) {
         val state = _uiState.value
         val requestedCategoryId = normalizeCategoryId(categoryId)
+        if (requestedCategoryId == normalizeCategoryId(state.selectedCategoryId)) return
         val activeCategoryId = when {
             requestedCategoryId.isBlank() -> "ALL"
             requestedCategoryId == "ALL" -> "ALL"
@@ -428,14 +440,20 @@ class GuideViewModel @Inject constructor(
     }
 
     /** Shift guide window forward by N hours (based on hoursToShow). */
+    fun showTime(timeMs: Long) {
+        val state = _uiState.value
+        val now = localHourFloorMs(System.currentTimeMillis())
+        val start = localHourFloorMs(timeMs).coerceIn(now, now + 7 * 86_400_000L - state.hoursToShow * 3_600_000L)
+        _uiState.value = state.copy(windowStartMs = start, windowEndMs = start + state.hoursToShow * 3_600_000L, epgData = emptyMap())
+        epgLoadJob?.cancel()
+        onVisibleChannelsChanged(state.focusedChannelIndex, state.focusedChannelIndex + 15)
+    }
+
     fun shiftForward() {
         val state = _uiState.value
         val shift = (state.hoursToShow / 2).coerceAtLeast(2).toLong() * 3_600_000L
         val newStart = state.windowStartMs + shift
-        _uiState.value = state.copy(
-            windowStartMs = newStart,
-            windowEndMs   = newStart + state.hoursToShow * 3_600_000L
-        )
+        showTime(newStart)
     }
 
     /** Shift guide window back (not before current hour). */
@@ -445,10 +463,7 @@ class GuideViewModel @Inject constructor(
         val state = _uiState.value
         val shift = (state.hoursToShow / 2).coerceAtLeast(2).toLong() * 3_600_000L
         val newStart = maxOf(hourStart, state.windowStartMs - shift)
-        _uiState.value = state.copy(
-            windowStartMs = newStart,
-            windowEndMs   = newStart + state.hoursToShow * 3_600_000L
-        )
+        showTime(newStart)
     }
 
     /** Jump directly to NOW in the time window. */
@@ -456,10 +471,7 @@ class GuideViewModel @Inject constructor(
         val state = _uiState.value
         val now = System.currentTimeMillis()
         val hourStart = localHourFloorMs(now)
-        _uiState.value = state.copy(
-            windowStartMs = hourStart,
-            windowEndMs   = hourStart + state.hoursToShow * 3_600_000L
-        )
+        showTime(hourStart)
     }
 
     private suspend fun loadEpg(channels: List<XtreamChannel>) = withContext(Dispatchers.IO) {

@@ -19,8 +19,8 @@ android {
         targetSdk = 35
         // v5.2.8: World-Class Performance, Replay 7-day Upgrade, Closed Captions (all 3 engines), Touch Support
         // OTA only offers a Gist payload when its versionCode is strictly greater.
-        versionCode = 99
-        versionName = "5.2.8"
+        versionCode = 101
+        versionName = "5.3.0"
 
         // v5.1 release metadata (see RELEASE_PLAYBOOK.md):
         //   versionCode 90 / 5.1.0 — Smart EPG show-aware DVR naming, NFO sidecars,
@@ -48,10 +48,8 @@ android {
             "\"${providers.gradleProperty("SENTRY_DSN").orNull ?: ""}\""
         )
 
-        // Support both ARMv7 (Firestick) and ARM64 (modern devices)
-        ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
-        }
+        // ABI filters belong to each flavor. Defaults merge additively with
+        // flavor filters and previously bundled both ARM architectures in each APK.
     }
 
     // ── Build Variants: Firestick vs Premium ─────────────────────────

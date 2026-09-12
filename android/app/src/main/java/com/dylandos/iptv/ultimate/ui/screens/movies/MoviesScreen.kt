@@ -66,6 +66,7 @@ import com.dylandos.iptv.ultimate.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import timber.log.Timber
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.withFrameNanos
 
 /**
@@ -132,7 +133,7 @@ fun MoviesScreen(
     // Previously used LaunchedEffect(uiState.categories.isNotEmpty()) which re-fired
     // every time the 5-min VOD cache expired and triggered a reload — trapping D-pad
     // focus on the category rail instead of returning to the poster grid.
-    var initialFocusDone by remember { mutableStateOf(false) }
+    var initialFocusDone by rememberSaveable { mutableStateOf(false) }
     var pendingGridFocusMove by remember { mutableStateOf(false) }
     var moveFocusAfterCategoryLoad by remember { mutableStateOf(false) }
 
@@ -142,7 +143,7 @@ fun MoviesScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                shouldRestoreFocusOnResume = true
+                shouldRestoreFocusOnResume = initialFocusDone
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -157,12 +158,12 @@ fun MoviesScreen(
     // Focus restoration on initial load AND on resume from details/player
     LaunchedEffect(
         uiState.categories.isNotEmpty(),
+        uiState.isLoading,
         uiState.itemCount,
         lazyMovies.itemCount,
-        shouldRestoreFocusOnResume,
-        initialFocusDone
+        shouldRestoreFocusOnResume
     ) {
-        val needsInitial = uiState.categories.isNotEmpty() && uiState.itemCount > 0 && lazyMovies.itemCount > 0 && !initialFocusDone
+        val needsInitial = uiState.categories.isNotEmpty() && !uiState.isLoading && !initialFocusDone
         val needsResume = shouldRestoreFocusOnResume && uiState.itemCount > 0 && lazyMovies.itemCount > 0
 
         if (!needsInitial && !needsResume) return@LaunchedEffect
@@ -172,8 +173,7 @@ fun MoviesScreen(
 
         val maxIdx = (uiState.itemCount - 1).coerceAtLeast(0)
         val restoredIndex = (uiState.focusedRow * POSTER_COLS + uiState.focusedCol).coerceIn(0, maxIdx)
-        val shouldRestoreGrid = uiState.itemCount > 0 &&
-            (uiState.gridFirstVisibleItemIndex > 0 || restoredIndex > 0 || uiState.selectedCategoryId != "ALL" || needsResume)
+        val shouldRestoreGrid = needsResume
 
         if (shouldRestoreGrid) {
             runCatching { posterGridState.scrollToItem(restoredIndex) }
@@ -195,6 +195,7 @@ fun MoviesScreen(
                 delay(48)
             }
         } else {
+            withFrameNanos { }
             runCatching { categoryFR.requestFocus() }
         }
     }
@@ -244,11 +245,10 @@ fun MoviesScreen(
             // Paging has not composed the first poster yet — keep flag set.
             return@LaunchedEffect
         }
-        // Reset focus to (0,0) so gridEntryFR attaches to the first on-screen poster.
-        // Without this, a second category OK leaves FR on a scrolled-off index and
-        // requestFocus fails for 3s → D-pad stuck on the category rail.
-        viewModel.setFocus(0, 0)
-        posterGridState.scrollToItem(0)
+        // Re-enter the remembered poster; category changes reset it in the ViewModel.
+        val entryIndex = (uiState.focusedRow * POSTER_COLS + uiState.focusedCol)
+            .coerceIn(0, (uiState.itemCount - 1).coerceAtLeast(0))
+        posterGridState.scrollToItem(entryIndex)
         delay(48)
         runCatching { firstPosterBringIntoView.bringIntoView() }
         val deadline = System.nanoTime() + 3_000_000_000L // 3s — Firestick composition is slow
@@ -364,25 +364,6 @@ fun MoviesScreen(
                 )
             )
 
-            MoviesCommandStrip(
-                movieCount = uiState.itemCount,
-                categoryName = uiState.categories
-                    .firstOrNull { it.categoryId == uiState.selectedCategoryId }
-                    ?.categoryName
-                    ?: "All Movies",
-                favoriteCount = favoriteIds.size,
-                resumeCount = uiState.resumeMap.size
-            )
-            CinemaPulseStrip(
-                movie = focusedMovie,
-                movieCount = uiState.itemCount,
-                favoriteCount = favoriteIds.size,
-                resumeCount = uiState.resumeMap.size,
-                categoryName = uiState.categories
-                    .firstOrNull { it.categoryId == uiState.selectedCategoryId }
-                    ?.categoryName
-                    ?: "All Movies"
-            )
 
             when {
                 uiState.isLoading -> {
@@ -451,13 +432,7 @@ fun MoviesScreen(
                             gridState = posterGridState,
                             entryItemFR = gridEntryFR,
                             entryBringIntoView = firstPosterBringIntoView,
-                            // While handing off from category OK, force FR onto index 0
-                            // (matches scrollToItem(0)) so requestFocus cannot miss.
-                            entryItemIndex = if (pendingGridFocusMove) {
-                                0
-                            } else {
-                                uiState.focusedRow * POSTER_COLS + uiState.focusedCol
-                            }
+                            entryItemIndex = (uiState.focusedRow * POSTER_COLS + uiState.focusedCol)
                                 .coerceIn(0, (uiState.itemCount - 1).coerceAtLeast(0)),
                             categoryFR = categoryFR,
                             onItemFocused = { row, col -> viewModel.setFocus(row, col) },
@@ -697,23 +672,19 @@ private fun MovieCategoryRail(
     onRightKey: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val sidebarFocus = com.dylandos.iptv.ultimate.ui.focus.LocalNavigationSidebarFocusRequester.current
     LazyColumn(
         state = listState,
         modifier = modifier
             .background(Color(0x660B1220))
-            .focusRequester(focusRequester)
-            // CRITICAL-002: Block UP key from escaping to TopAppBar back button.
-            // Poster grid already blocks UP via focusProperties { up = Cancel } but
-            // the category rail needs the same protection at its first item.
-            .focusProperties {
-                up = FocusRequester.Cancel
-                left = FocusRequester.Cancel
+                        .focusProperties {
+                left = sidebarFocus ?: FocusRequester.Default
             },
         contentPadding = PaddingValues(vertical = 4.dp)
     ) {
         // key {} ensures Compose reuses existing composables on category list updates
         // instead of recreating all items — preserves MutableInteractionSource/focus state.
-        itemsIndexed(categories, key = { _, cat -> cat.categoryId }) { _, cat ->
+        itemsIndexed(categories, key = { _, cat -> cat.categoryId }) { index, cat ->
             val isSelected = cat.categoryId == selectedId
             val interactionSource = remember { MutableInteractionSource() }
             val isFocused by interactionSource.collectIsFocusedAsState()
@@ -721,6 +692,7 @@ private fun MovieCategoryRail(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .then(if (isSelected || (index == 0 && categories.none { it.categoryId == selectedId })) Modifier.focusRequester(focusRequester) else Modifier)
                     .background(
                         when {
                             isSelected -> Accent.copy(alpha = 0.18f)
@@ -737,9 +709,6 @@ private fun MovieCategoryRail(
                             )
                         else Modifier
                     )
-                    // FIXED: focusable BEFORE onKeyEvent so key handler only fires
-                    // when this item actually has focus (prevents spurious callbacks).
-                    .focusable(interactionSource = interactionSource)
                     .onKeyEvent { event ->
                         when {
                             event.isRemoteConfirmKey() -> {
@@ -753,11 +722,13 @@ private fun MovieCategoryRail(
                                 true
                             }
                             // Keep focus inside Movies; Back is the intentional way out.
-                            event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft -> true
+                            event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft -> {
+                                runCatching { sidebarFocus?.requestFocus() }; true
+                            }
                             else -> false
                         }
                     }
-                    .clickable {
+                    .clickable(interactionSource = interactionSource, indication = null) {
                         onSelected(cat.categoryId)
                     }
                     .padding(horizontal = 8.dp, vertical = 9.dp)
@@ -809,7 +780,7 @@ private fun MoviePosterGrid(
         columns = GridCells.Fixed(POSTER_COLS),
         modifier = modifier
             // Prevent focus escaping UPWARD to the TopAppBar back button at row 0
-            .focusProperties { up = FocusRequester.Cancel },
+,
         contentPadding = PaddingValues(12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -877,7 +848,6 @@ private fun MoviePosterCard(
             .clip(RoundedCornerShape(7.dp))
             .then(if (bringIntoViewRequester != null) Modifier.bringIntoViewRequester(bringIntoViewRequester) else Modifier)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable(interactionSource = interactionSource)
             .onFocusChanged { if (it.isFocused) onFocused() }
             .onKeyEvent { event ->
                 when {
@@ -896,7 +866,7 @@ private fun MoviePosterCard(
                     else -> false
                 }
             }
-            .clickable { onSelected() }
+            .clickable(interactionSource = interactionSource, indication = null) { onSelected() }
             .then(
                 if (showFocus)
                     Modifier.border(2.5.dp, Color(0xFFFF6B7A), RoundedCornerShape(7.dp))

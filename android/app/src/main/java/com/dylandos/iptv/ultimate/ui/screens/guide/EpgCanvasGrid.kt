@@ -67,6 +67,7 @@ fun EpgCanvasGrid(
     listState:           LazyListState,
     rowHeight:           Dp,
     focusedChannelIndex: Int,
+    selectedTimeMs:      Long = System.currentTimeMillis(),
     dpPerMinute:         Dp             = 5.dp,
     modifier:            Modifier       = Modifier,
     onProgramSelected:   (channelId: Int, channelName: String, title: String, startMs: Long, endMs: Long, hasArchive: Boolean) -> Unit
@@ -185,8 +186,10 @@ fun EpgCanvasGrid(
 
                         val isLive = now in progStartMs until progEndMs
                         val isPast = progEndMs <= now
+                        val isSelected = isFocusedRow && selectedTimeMs in progStartMs until progEndMs
 
                         val cellColor = when {
+                            isSelected             -> Accent.copy(alpha = 0.45f)
                             isLive && isFocusedRow -> Accent.copy(alpha = 0.30f)
                             isLive                 -> Accent.copy(alpha = 0.16f)
                             isPast                 -> BgSurface3.copy(alpha = 0.55f)
@@ -194,6 +197,7 @@ fun EpgCanvasGrid(
                             else                   -> BgSurface3
                         }
                         val borderColor = when {
+                            isSelected             -> AccentBright
                             isFocusedRow && isLive -> Accent.copy(alpha = 0.80f)
                             isFocusedRow           -> Accent.copy(alpha = 0.50f)
                             isLive                 -> Accent.copy(alpha = 0.40f)

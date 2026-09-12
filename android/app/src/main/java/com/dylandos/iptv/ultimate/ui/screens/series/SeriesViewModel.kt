@@ -77,7 +77,7 @@ class SeriesViewModel @Inject constructor(
         private const val KEY_GRID_FIRST_OFFSET = "series_grid_first_offset"
         private const val KEY_CATEGORY_FIRST_INDEX = "series_category_first_index"
         private const val KEY_CATEGORY_FIRST_OFFSET = "series_category_first_offset"
-        private const val LOAD_TIMEOUT_MS = 25_000L
+        private const val LOAD_TIMEOUT_MS = 60_000L
         private const val MAX_ALL_ITEMS = 200
         private const val MAX_CATEGORY_ITEMS = 300
         const val FAVORITES_CATEGORY_ID = "FAVORITES"
@@ -206,7 +206,7 @@ class SeriesViewModel @Inject constructor(
                     }
 
                     val requestedCategoryId = normalizeCategoryId(savedCategoryId)
-                    val activeCategoryId = when {
+                    var activeCategoryId = when {
                         requestedCategoryId == FAVORITES_CATEGORY_ID -> FAVORITES_CATEGORY_ID
                         requestedCategoryId == "ALL" -> "ALL"
                         requestedCategoryId.isNotBlank() &&
@@ -219,7 +219,20 @@ class SeriesViewModel @Inject constructor(
                             }?.categoryId?.let(::normalizeCategoryId) ?: "ALL"
                     }
 
-                    val itemCount = persistCategory(activeCategoryId)
+                    var itemCount = try { persistCategory(activeCategoryId) } catch (e: Exception) {
+                        if (e is CancellationException || activeCategoryId == FAVORITES_CATEGORY_ID) throw e
+                        0
+                    }
+                    if (activeCategoryId != FAVORITES_CATEGORY_ID && itemCount == 0) {
+                        for (category in fullCategoryList.filter { it.categoryId !in listOf("ALL", FAVORITES_CATEGORY_ID) }.take(3)) {
+                            val candidateId = normalizeCategoryId(category.categoryId)
+                            val count = try { persistCategory(candidateId) } catch (e: Exception) {
+                                if (e is CancellationException) throw e
+                                0
+                            }
+                            if (count > 0) { activeCategoryId = candidateId; itemCount = count; break }
+                        }
+                    }
 
                     val requestedRow = (savedStateHandle[KEY_FOCUSED_ROW] ?: _uiState.value.focusedRow).coerceAtLeast(0)
                     val requestedCol = (savedStateHandle[KEY_FOCUSED_COL] ?: _uiState.value.focusedCol).coerceAtLeast(0)
@@ -237,6 +250,7 @@ class SeriesViewModel @Inject constructor(
                     )
                 }
 
+                savedCategoryId = loaded.activeCategoryId
                 _uiState.value = _uiState.value.copy(
                     categories = loaded.categories,
                     selectedCategoryId = loaded.activeCategoryId,
@@ -278,7 +292,7 @@ class SeriesViewModel @Inject constructor(
             FAVORITES_CATEGORY_ID -> resolveFavoriteSeries(_favoriteSeriesIds.value)
             "ALL" -> {
                 // A5: cap at the network layer — see MoviesViewModel.fetchMoviesForCategory.
-                val raw = xtreamRepository.getSeries(maxItems = MAX_ALL_ITEMS * 2).getOrDefault(emptyList())
+                val raw = xtreamRepository.getSeries(maxItems = MAX_ALL_ITEMS * 2).getOrThrow()
                 val filtered = contentFilterRepository.filterSeries(raw)
                 if (filtered.size > MAX_ALL_ITEMS) {
                     Timber.w("Series ALL capped at $MAX_ALL_ITEMS (fetched ${raw.size})")
@@ -286,7 +300,7 @@ class SeriesViewModel @Inject constructor(
                 } else filtered
             }
             else -> {
-                val raw = xtreamRepository.getSeries(categoryId, maxItems = MAX_CATEGORY_ITEMS * 2).getOrDefault(emptyList())
+                val raw = xtreamRepository.getSeries(categoryId, maxItems = MAX_CATEGORY_ITEMS * 2).getOrThrow()
                 val filtered = contentFilterRepository.filterSeries(raw)
                 if (filtered.size > MAX_CATEGORY_ITEMS) {
                     Timber.w(

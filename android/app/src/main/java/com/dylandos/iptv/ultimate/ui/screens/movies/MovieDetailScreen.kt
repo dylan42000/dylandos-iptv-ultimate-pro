@@ -306,6 +306,7 @@ fun MovieDetailScreen(
 
                                 Spacer(Modifier.height(8.dp))
 
+                                com.dylandos.iptv.ultimate.ui.components.MediaRatingsPanel(movie.name, "movie", info?.youtubeTrailer)
                                 // Action buttons
                                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     // PLAY button

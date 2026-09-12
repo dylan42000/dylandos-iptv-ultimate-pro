@@ -82,6 +82,8 @@ fun HomeScreen(
     val stats by viewModel.stats.collectAsState()
     val content by viewModel.content.collectAsState()
     val settingsState by settingsViewModel.state.collectAsState()
+    val discoveryViewModel: com.dylandos.iptv.ultimate.ui.components.MediaRatingsViewModel = hiltViewModel()
+    val homePreferences = discoveryViewModel.repository.preferences
 
     LaunchedEffect(Unit) {
         viewModel.loadHomeData()
@@ -104,14 +106,11 @@ fun HomeScreen(
                 )
             }
 
-            item { HomeStatsRow(stats = stats) }
 
             // ── Fast Firestick dashboard ─────────────────────────────────────
             item {
                 val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
                 val isNarrow = screenWidthDp < 600
-                val columns = if (isNarrow) 2 else 4
-                val gridHeight = if (isNarrow) 480.dp else 278.dp
 
                 Column(
                     modifier = Modifier
@@ -125,14 +124,11 @@ fun HomeScreen(
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(bottom = 10.dp)
                     )
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(columns),
+                    LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(gridHeight),
-                        userScrollEnabled = false
+                            .height(76.dp)
                     ) {
                         items(quickAccessItems) { item ->
                             QuickAccessCard(item = item, onClick = { navController.navigateSafe(item.route) })
@@ -141,7 +137,7 @@ fun HomeScreen(
                 }
             }
 
-            if (content.liveNow.isNotEmpty()) {
+            if (content.liveNow.isNotEmpty() && homePreferences.getBoolean("home_live", true)) {
                 item {
                     ContentRailLabel(label = "Live TV")
                     LiveRail(
@@ -157,9 +153,9 @@ fun HomeScreen(
                 }
             }
 
-            if (content.topMovies.isNotEmpty()) {
+            if (content.topMovies.isNotEmpty() && homePreferences.getBoolean("home_movies", true)) {
                 item {
-                    ContentRailLabel(label = "Movies")
+                    ContentRailLabel(label = content.moviesLabel)
                     MovieRail(
                         movies = content.topMovies,
                         onPlay = { navController.navigateSafe(viewModel.playMovieRoute(it)) }
@@ -168,9 +164,9 @@ fun HomeScreen(
                 }
             }
 
-            if (content.topSeries.isNotEmpty()) {
+            if (content.topSeries.isNotEmpty() && homePreferences.getBoolean("home_series", true)) {
                 item {
-                    ContentRailLabel(label = "Series")
+                    ContentRailLabel(label = content.seriesLabel)
                     SeriesRail(
                         series = content.topSeries,
                         onPlay = { s ->
@@ -183,6 +179,13 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
             }
+            if (content.recentMovies.isNotEmpty() && content.topMovies != content.recentMovies && homePreferences.getBoolean("home_movies", true)) {
+                item {
+                    ContentRailLabel("Recently added movies")
+                    MovieRail(content.recentMovies, onPlay = { navController.navigateSafe(viewModel.playMovieRoute(it)) })
+                }
+            }
+            item { HomeStatsRow(stats = stats) }
             item { Spacer(modifier = Modifier.height(24.dp)) }
         }
     }
@@ -912,7 +915,8 @@ private fun TopNavButton(item: QuickAccessItem, onClick: () -> Unit) {
 private fun QuickAccessCard(item: QuickAccessItem, onClick: () -> Unit) {
     Card(
         modifier = Modifier
-            .aspectRatio(1.6f)
+            .width(130.dp)
+            .fillMaxHeight()
             .tvCardFocusable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = BgSurface2),
         shape = RoundedCornerShape(8.dp),
@@ -926,7 +930,7 @@ private fun QuickAccessCard(item: QuickAccessItem, onClick: () -> Unit) {
                         listOf(BgSurface2, BgSurface3.copy(alpha = 0.88f))
                     )
                 )
-                .padding(14.dp)
+                .padding(10.dp)
         ) {
             Column(
                 verticalArrangement = Arrangement.SpaceBetween,
@@ -936,7 +940,7 @@ private fun QuickAccessCard(item: QuickAccessItem, onClick: () -> Unit) {
                     imageVector = item.icon,
                     contentDescription = item.title,
                     tint = Accent,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(20.dp)
                 )
                 Text(
                     text = item.title,
@@ -964,6 +968,7 @@ private val quickAccessItems = listOf(
     QuickAccessItem("Series",    Icons.Default.Theaters,           Screen.Series.route),
     QuickAccessItem("DVR",       Icons.Default.RadioButtonChecked, Screen.Dvr.route),
     QuickAccessItem("Favorites", Icons.Default.Favorite,          Screen.Favorites.route),
+    QuickAccessItem("My Lists", Icons.Default.PlaylistPlay, "custom_lists"),
     QuickAccessItem("Search",    Icons.Default.Search,             Screen.Search.route),
     QuickAccessItem("Settings",  Icons.Default.Settings,           Screen.Settings.route)
 )

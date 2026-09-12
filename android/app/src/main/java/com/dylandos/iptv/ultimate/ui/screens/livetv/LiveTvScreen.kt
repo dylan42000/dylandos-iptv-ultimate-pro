@@ -144,11 +144,13 @@ fun LiveTvScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(shouldRestoreFocusOnResume) {
-        if (shouldRestoreFocusOnResume) {
-            shouldRestoreFocusOnResume = false
+    LaunchedEffect(shouldRestoreFocusOnResume, uiState.filteredChannels.size) {
+        if (shouldRestoreFocusOnResume && uiState.filteredChannels.isNotEmpty()) {
+            channelListState.scrollToItem(uiState.focusedChannelIndex.coerceIn(0, uiState.filteredChannels.lastIndex))
             delay(100)
-            runCatching { channelListFocusRequester.requestFocus() }
+            if (runCatching { channelListFocusRequester.requestFocus() }.isSuccess) {
+                shouldRestoreFocusOnResume = false
+            }
         }
     }
 
@@ -256,34 +258,6 @@ fun LiveTvScreen(
                 }
             )
 
-            LiveCommandStrip(
-                channelCount = uiState.filteredChannels.size,
-                categoryName = uiState.categories
-                    .firstOrNull { it.categoryId == uiState.selectedCategoryId }
-                    ?.categoryName
-                    ?: "All Channels",
-                hasActiveChannel = uiState.activeStreamId != null
-            )
-
-            LiveFocusDeck(
-                channel = uiState.filteredChannels.getOrNull(uiState.focusedChannelIndex),
-                programs = uiState.filteredChannels.getOrNull(uiState.focusedChannelIndex)
-                    ?.let { uiState.epgData[it.streamId] }
-                    ?: emptyList(),
-                categoryName = uiState.categories
-                    .firstOrNull { it.categoryId == uiState.selectedCategoryId }
-                    ?.categoryName
-                    ?: "All Channels",
-                channelIndex = uiState.focusedChannelIndex,
-                channelCount = uiState.filteredChannels.size,
-                isFavorite = uiState.filteredChannels
-                    .getOrNull(uiState.focusedChannelIndex)
-                    ?.streamId
-                    ?.let { it in uiState.favoriteChannelIds } == true,
-                isActive = uiState.filteredChannels
-                    .getOrNull(uiState.focusedChannelIndex)
-                    ?.streamId == uiState.activeStreamId
-            )
 
             when {
                 uiState.isLoading -> {
@@ -985,12 +959,6 @@ private fun ChannelRow(
                 scaleY = if (showFocus) 1.012f else 1f
             }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onSelected,
-                onLongClick = onMenu
-            )
             .onFocusChanged { if (it.isFocused) onFocused() }
             .onKeyEvent { event ->
                 when {
@@ -1009,6 +977,12 @@ private fun ChannelRow(
                     else -> false
                 }
             }
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onSelected,
+                onLongClick = onMenu
+            )
             .then(
                 when {
                     showFocus -> Modifier.border(

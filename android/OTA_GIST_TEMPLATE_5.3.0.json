@@ -1,0 +1,31 @@
+{
+  "versionCode": 101,
+  "version": "5.3.0",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "TIMESHIFT: Seekable local MPEG-TS rolling buffer; pause/rewind controls and startup watchdog corrected.",
+    "GUIDE: Program selection with left/right, selected-program options, reminders, and refreshed time windows up to seven days where supplied.",
+    "HOME: Compact shortcuts, recent additions, configurable sections, and optional TMDB-ranked recent titles matched to your catalog.",
+    "METADATA: Cached TMDB scores and trailers, optional IMDb/Rotten Tomatoes via OMDb, primary-language setting, and faster detail rendering.",
+    "BROWSING: Remember Live TV category selections and try alternate movie/series categories when the initial category is empty or unavailable.",
+    "NAVIGATION: Movies and Series open on categories; improved return focus, grid scrolling, and category-to-poster navigation.",
+    "SEARCH: Removed unstable lazy-list focus restoration, preserved result position and section, deduplicated results, and moved matching off the UI thread.",
+    "LAYOUT: Removed oversized browse headers so Live TV, Movies, and Series have more room on Firestick and Android Premium; sidebar now scrolls and shows labels.",
+    "DVR: Keep recording accounts within the current provider; release failed recording resources, preserve concurrent recording state, and handle low storage.",
+    "TIMESHIFT: Bounded Media3 memory, safer low-space cache sizing, seek-end clamping, consistent pause state, and local rewind preferred over provider restart.",
+    "RELEASE: Updated Android build tooling for Kotlin/R8 compatibility and removed duplicate architecture payloads from each APK."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_SIGNED_FIRESTICK_APK_DIRECT_URL",
+      "apkSize": 50856800,
+      "sha256": "0237d41f5f4e4f3b0cea3634cf02be423f7efc5df372f042228aea3840a30240"
+    },
+    "premium": {
+      "apkUrl": "REPLACE_WITH_SIGNED_PREMIUM_APK_DIRECT_URL",
+      "apkSize": 39307945,
+      "sha256": "a1536b42b205564c88a0678c5f194ac571c7b22abff6b17e6310497c457d0bfc"
+    }
+  }
+}

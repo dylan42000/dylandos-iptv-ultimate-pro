@@ -72,6 +72,7 @@ import com.dylandos.iptv.ultimate.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import timber.log.Timber
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.withFrameNanos
 
 private const val SERIES_COLS = 5
@@ -132,7 +133,7 @@ fun SeriesScreen(
     // Without this guard, every cold recomposition (rotation, process kill) re-fires
     // the focus request, snapping focus to the category rail even when the user was
     // navigating the poster grid. Mirrors the same fix already applied in MoviesScreen.
-    var initialFocusDone by remember { mutableStateOf(false) }
+    var initialFocusDone by rememberSaveable { mutableStateOf(false) }
     var pendingGridFocusMove by remember { mutableStateOf(false) }
     var moveFocusAfterCategoryLoad by remember { mutableStateOf(false) }
 
@@ -149,7 +150,7 @@ fun SeriesScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.consumePendingOpenIfAny()
-                shouldRestoreFocusOnResume = true
+                shouldRestoreFocusOnResume = initialFocusDone
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -163,12 +164,12 @@ fun SeriesScreen(
     // Focus restoration on initial load AND on resume from details/player
     LaunchedEffect(
         uiState.categories.isNotEmpty(),
+        uiState.isLoading,
         uiState.itemCount,
         lazySeries.itemCount,
-        shouldRestoreFocusOnResume,
-        initialFocusDone
+        shouldRestoreFocusOnResume
     ) {
-        val needsInitial = uiState.categories.isNotEmpty() && uiState.itemCount > 0 && lazySeries.itemCount > 0 && !initialFocusDone
+        val needsInitial = uiState.categories.isNotEmpty() && !uiState.isLoading && !initialFocusDone
         val needsResume = shouldRestoreFocusOnResume && uiState.itemCount > 0 && lazySeries.itemCount > 0
 
         if (!needsInitial && !needsResume) return@LaunchedEffect
@@ -178,8 +179,7 @@ fun SeriesScreen(
 
         val maxIdx = (uiState.itemCount - 1).coerceAtLeast(0)
         val restoredIndex = (uiState.focusedRow * SERIES_COLS + uiState.focusedCol).coerceIn(0, maxIdx)
-        val shouldRestoreGrid = uiState.itemCount > 0 &&
-            (uiState.gridFirstVisibleItemIndex > 0 || restoredIndex > 0 || uiState.selectedCategoryId != "ALL" || needsResume)
+        val shouldRestoreGrid = needsResume
 
         if (shouldRestoreGrid) {
             runCatching { seriesGridState.scrollToItem(restoredIndex) }
@@ -201,6 +201,7 @@ fun SeriesScreen(
                 delay(48)
             }
         } else {
+            withFrameNanos { }
             runCatching { categoryFR.requestFocus() }
         }
     }
@@ -265,10 +266,10 @@ fun SeriesScreen(
         if (lazySeries.itemCount <= 0) {
             return@LaunchedEffect
         }
-        // Reset focus to (0,0) so gridEntryFR attaches to the first on-screen poster.
-        // Second category OK previously left FR on an off-screen index → focus trap.
-        viewModel.setFocus(0, 0)
-        seriesGridState.scrollToItem(0)
+        // Re-enter the remembered poster; category changes reset it in the ViewModel.
+        val entryIndex = (uiState.focusedRow * SERIES_COLS + uiState.focusedCol)
+            .coerceIn(0, (uiState.itemCount - 1).coerceAtLeast(0))
+        seriesGridState.scrollToItem(entryIndex)
         delay(48)
         runCatching { firstPosterBringIntoView.bringIntoView() }
         val deadline = System.nanoTime() + 3_000_000_000L // 3s — Firestick composition is slow
@@ -378,25 +379,6 @@ fun SeriesScreen(
                 )
             )
 
-            SeriesCommandStrip(
-                seriesCount = uiState.itemCount,
-                categoryName = uiState.categories
-                    .firstOrNull { it.categoryId == uiState.selectedCategoryId }
-                    ?.categoryName
-                    ?: "All Series",
-                favoriteCount = favoriteIds.size,
-                watchedCount = uiState.watchedEpisodeIds.size
-            )
-            BingeRadarStrip(
-                series = focusedSeries,
-                seriesCount = uiState.itemCount,
-                favoriteCount = favoriteIds.size,
-                watchedCount = uiState.watchedEpisodeIds.size,
-                categoryName = uiState.categories
-                    .firstOrNull { it.categoryId == uiState.selectedCategoryId }
-                    ?.categoryName
-                    ?: "All Series"
-            )
 
             when {
                 uiState.isLoading -> {
@@ -463,11 +445,7 @@ fun SeriesScreen(
                             gridState = seriesGridState,
                             entryItemFR = gridEntryFR,
                             entryBringIntoView = firstPosterBringIntoView,
-                            entryItemIndex = if (pendingGridFocusMove) {
-                                0
-                            } else {
-                                uiState.focusedRow * SERIES_COLS + uiState.focusedCol
-                            }
+                            entryItemIndex = (uiState.focusedRow * SERIES_COLS + uiState.focusedCol)
                                 .coerceIn(0, (uiState.itemCount - 1).coerceAtLeast(0)),
                             categoryFR = categoryFR,
                             onItemFocused = { row, col -> viewModel.setFocus(row, col) },
@@ -709,20 +687,17 @@ private fun SeriesCategoryRail(
     onRightKey: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val sidebarFocus = com.dylandos.iptv.ultimate.ui.focus.LocalNavigationSidebarFocusRequester.current
     LazyColumn(
         state = listState,
         modifier = modifier
             .background(Color(0x660B1220))
-            .focusRequester(focusRequester)
-            // CRITICAL-002: Block UP key from escaping to TopAppBar back button.
-            // Same protection that SeriesPosterGrid applies for row-0 grid cards.
-            .focusProperties {
-                up = FocusRequester.Cancel
-                left = FocusRequester.Cancel
+                        .focusProperties {
+                left = sidebarFocus ?: FocusRequester.Default
             },
         contentPadding = PaddingValues(vertical = 4.dp)
     ) {
-        itemsIndexed(categories, key = { _, cat -> cat.categoryId }) { _, cat ->
+        itemsIndexed(categories, key = { _, cat -> cat.categoryId }) { index, cat ->
             val isSelected = cat.categoryId == selectedId
             val interactionSource = remember { MutableInteractionSource() }
             val isFocused by interactionSource.collectIsFocusedAsState()
@@ -730,6 +705,7 @@ private fun SeriesCategoryRail(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .then(if (isSelected || (index == 0 && categories.none { it.categoryId == selectedId })) Modifier.focusRequester(focusRequester) else Modifier)
                     .background(
                         when {
                             isSelected -> Accent.copy(alpha = 0.22f)
@@ -746,7 +722,6 @@ private fun SeriesCategoryRail(
                             )
                         else Modifier
                     )
-                    .focusable(interactionSource = interactionSource)
                     .onKeyEvent { event ->
                         when {
                             event.isRemoteConfirmKey() -> {
@@ -757,11 +732,13 @@ private fun SeriesCategoryRail(
                                 onRightKey()
                                 true
                             }
-                            event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft -> true
+                            event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft -> {
+                                runCatching { sidebarFocus?.requestFocus() }; true
+                            }
                             else -> false
                         }
                     }
-                    .clickable {
+                    .clickable(interactionSource = interactionSource, indication = null) {
                         onSelected(cat.categoryId)
                     }
                     .padding(horizontal = 8.dp, vertical = 10.dp)
@@ -811,7 +788,7 @@ private fun SeriesPosterGrid(
         state = gridState,
         columns = GridCells.Fixed(SERIES_COLS),
         modifier = modifier
-            .focusProperties { up = FocusRequester.Cancel },
+,
         contentPadding = PaddingValues(12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -875,7 +852,6 @@ private fun SeriesPosterCard(
             .clip(RoundedCornerShape(7.dp))
             .then(if (bringIntoViewRequester != null) Modifier.bringIntoViewRequester(bringIntoViewRequester) else Modifier)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable(interactionSource = interactionSource)
             .onFocusChanged { if (it.isFocused) onFocused() }
             .onKeyEvent { event ->
                 when {
@@ -892,7 +868,7 @@ private fun SeriesPosterCard(
                     else -> false
                 }
             }
-            .clickable { onSelected() }
+            .clickable(interactionSource = interactionSource, indication = null) { onSelected() }
             .then(if (showFocus) Modifier.border(2.5.dp, Color(0xFFFF6B7A), RoundedCornerShape(7.dp)) else Modifier)
     ) {
         if (!series.cover.isNullOrBlank()) {
@@ -1164,6 +1140,7 @@ internal fun SeriesDetailPopup(
                             )
                         }
 
+                        com.dylandos.iptv.ultimate.ui.components.MediaRatingsPanel(series.name, "tv", info?.youtubeTrailer ?: series.youtubeTrailer)
                         val director = info?.director?.trim()?.ifBlank { null }
                             ?: series.director?.trim()?.ifBlank { null }
                         if (!director.isNullOrBlank()) {
@@ -1669,7 +1646,6 @@ private fun SeriesSeasonListItem(
             )
             .focusRequester(focusRequester)
             .onFocusChanged { if (it.isFocused) onSelect() }
-            .focusable(interactionSource = interactionSource)
             .onKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
                 when {
@@ -1733,7 +1709,6 @@ private fun EpisodeRow(
                 if (isFocused) AccentSurfaceHover else BgSurface3.copy(alpha = 0.4f),
                 RoundedCornerShape(8.dp)
             )
-            .focusable(interactionSource = interactionSource)
             .onKeyEvent { e ->
                 when {
                     e.isRemoteConfirmKey() -> {
@@ -1801,4 +1776,3 @@ private fun EpisodeRow(
         }
     }
 }
-

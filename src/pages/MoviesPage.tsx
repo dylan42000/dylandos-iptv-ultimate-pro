@@ -366,6 +366,7 @@ export const MoviesPage: React.FC<MoviesPageProps> = ({
         {!isFiltering && filteredMovies.length > 0 && viewMode === 'grid' && (
           <div className="w-full h-full p-4">
             <VirtualContentGrid
+              restorationKey={`movies:${selectedCategoryId}:${filteredMovies[0]?.stream_id}`}
               items={filteredMovies}
               renderCard={renderMovieCard}
               columnWidth={gridSize.columnWidth}

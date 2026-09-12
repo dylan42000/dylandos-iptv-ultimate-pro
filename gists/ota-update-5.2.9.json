@@ -1,0 +1,26 @@
+{
+  "versionCode": 100,
+  "version": "5.2.9",
+  "mandatory": false,
+  "minRequiredVersionCode": 0,
+  "changelog": [
+    "NAVIGATION: Movies and Series open on categories; improved return focus, grid scrolling, and category-to-poster navigation.",
+    "SEARCH: Removed unstable lazy-list focus restoration, preserved result position and section, deduplicated results, and moved matching off the UI thread.",
+    "LAYOUT: Removed oversized browse headers so Live TV, Movies, and Series have more room on Firestick and Android Premium; sidebar now scrolls and shows labels.",
+    "DVR: Failed Android recordings release native players and file handles; safer concurrent recording state and low-storage handling.",
+    "TIMESHIFT: Bounded Media3 memory, safer low-space cache sizing, seek-end clamping, consistent pause state, and local rewind preferred over provider restart.",
+    "RELEASE: Updated Android build tooling for Kotlin/R8 compatibility and removed duplicate architecture payloads from each APK."
+  ],
+  "flavors": {
+    "firestick": {
+      "apkUrl": "REPLACE_WITH_SIGNED_FIRESTICK_APK_DIRECT_URL",
+      "apkSize": 50816673,
+      "sha256": "6ccf1a3383bd7da04ff32ed5edaa2ebe0ffb1d89c41c0132187d17a3930986db"
+    },
+    "premium": {
+      "apkUrl": "REPLACE_WITH_SIGNED_PREMIUM_APK_DIRECT_URL",
+      "apkSize": 39267813,
+      "sha256": "82a8ddf3d386d81ba8781283eded810859ce495b0572b9cc01b7dfd1a9dfec65"
+    }
+  }
+}

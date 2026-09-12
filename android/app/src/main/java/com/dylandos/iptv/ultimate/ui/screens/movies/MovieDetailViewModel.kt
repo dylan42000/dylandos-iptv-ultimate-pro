@@ -93,19 +93,7 @@ class MovieDetailViewModel @Inject constructor(
                 val catalogHint = withContext(Dispatchers.IO) {
                     xtreamRepository.getCachedVodStreams().orEmpty()
                 }
-                val (movieInfo, similar) = coroutineScope {
-                    val infoDeferred = async(Dispatchers.IO) {
-                        xtreamRepository.getVodInfo(streamId).getOrThrow()
-                    }
-                    val similarDeferred = async(Dispatchers.Default) {
-                        buildRecommendations(
-                            selected = movie,
-                            selectedInfo = null,
-                            catalog = catalogHint
-                        )
-                    }
-                    infoDeferred.await() to similarDeferred.await()
-                }
+                val movieInfo = xtreamRepository.getVodInfo(streamId).getOrThrow()
                 if (loadedStreamId == streamId) {
                     val resolved = movie
                         ?: movieFromInfo(streamId, movieInfo)
@@ -124,19 +112,18 @@ class MovieDetailViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(
                         movie = resolved,
                         info = movieInfo.info,
-                        similarMovies = if (similar.isNotEmpty()) {
-                            similar
-                        } else {
-                            buildRecommendations(
-                                selected = resolved,
-                                selectedInfo = movieInfo.info,
-                                catalog = catalogHint
-                            )
-                        },
+                        similarMovies = emptyList(),
                         isLoadingInfo = false,
                         infoEmpty = !hasInfo,
                         error = if (resolved == null) "Movie not found" else null,
                     )
+                    // Show playable details before ranking a potentially huge catalog.
+                    val similar = withContext(Dispatchers.Default) {
+                        buildRecommendations(resolved, movieInfo.info, catalogHint)
+                    }
+                    if (loadedStreamId == streamId) {
+                        _uiState.value = _uiState.value.copy(similarMovies = similar)
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -227,10 +214,10 @@ class MovieDetailViewModel @Inject constructor(
                 val ratingDistance = abs(candidate.rating5Based - selectedRating)
                 val score =
                     sharedTitleTokens * 55.0 +
-                    if (sameCategory) 32.0 else 0.0 +
+                    (if (sameCategory) 32.0 else 0.0) +
                     (18.0 - ratingDistance * 6.0).coerceAtLeast(0.0) +
                     candidate.rating5Based.coerceAtLeast(0.0) * 2.0 +
-                    if (!candidate.added.isNullOrBlank()) 3.0 else 0.0
+                    (if (!candidate.added.isNullOrBlank()) 3.0 else 0.0)
                 candidate to score
             }
             .sortedByDescending { it.second }

@@ -423,7 +423,7 @@ private fun formatPlaybackTimeMs(ms: Long): String {
 }
 
 private fun localTimeShortString(): String =
-    DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date())
+    com.dylandos.iptv.ultimate.ui.util.TimeFormatter.formatShortTime(System.currentTimeMillis())
 
 @Composable
 private fun PlaybackTimeReadout(
@@ -660,7 +660,7 @@ fun PlayerScreen(
             )
         }
         val created = exoHost.getOrCreate(
-            timeshiftEnabled = liveTimeshiftEnabled,
+            timeshiftEnabled = false, // The local HLS ring owns disk storage; byte caching cannot make TS seekable.
             timeshiftPath = liveTimeshiftPath,
             ringMaxBytes = ringMaxBytes
         )
@@ -685,6 +685,7 @@ fun PlayerScreen(
     var pauseCatchupWhenReady by remember { mutableStateOf(false) }
     var lastLibVlcPlayingAtMs by remember { mutableLongStateOf(0L) }
     var userRequestedPause by remember { mutableStateOf(false) }
+    var media3HasStarted by remember { mutableStateOf(false) }
     var vlcLayout by remember { mutableStateOf<VLCVideoLayout?>(null) }
     // Holds the open PFD for DVR content:// playback — closed when player is disposed
     var dvrPfd by remember { mutableStateOf<ParcelFileDescriptor?>(null) }
@@ -796,7 +797,7 @@ fun PlayerScreen(
             }
             useExoFallback -> {
                 val ep = ensureExoPlayer()
-                if (ep.isPlaying) ep.pause() else ep.play()
+                if (ep.isPlaying) pauseActivePlayer() else playActivePlayer()
             }
             else -> {
                 runCatching {
@@ -810,7 +811,13 @@ fun PlayerScreen(
         val target = (currentPositionMs() + deltaMs).coerceAtLeast(0L)
         when {
             useMpvPrimary -> mpvWrapper.seekTo(target)
-            useExoFallback -> ensureExoPlayer().seekTo(target)
+            useExoFallback -> {
+                val ep = ensureExoPlayer()
+                if (ep.isCurrentMediaItemSeekable) {
+                    val end = ep.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
+                    ep.seekTo(target.coerceAtMost(end))
+                }
+            }
             else -> runCatching { mediaPlayer?.time = target }
         }
     }
@@ -827,8 +834,8 @@ fun PlayerScreen(
     fun rewindLiveOrCatchup(deltaMs: Long = configuredSkipMs) {
         when {
             uiState.isCatchupPlayback -> seekActivePlayer(-deltaMs)
-            uiState.canRestartCurrentProgram -> viewModel.restartCurrentProgram()
             liveTimeshiftEnabled && canSeekActivePlayer() -> seekActivePlayer(-deltaMs)
+            uiState.canRestartCurrentProgram -> viewModel.restartCurrentProgram()
             liveTimeshiftEnabled -> pauseActivePlayer()
         }
     }
@@ -1035,6 +1042,7 @@ fun PlayerScreen(
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 if (useExoFallback) isPlaying = playing
+                if (useExoFallback && playing) media3HasStarted = true
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -1179,6 +1187,7 @@ fun PlayerScreen(
     // This keeps Exo/Media3 out of the normal Firestick playback path.
     LaunchedEffect(useExoFallback, streamLoadToken) {
         val requestToken = streamLoadToken
+        media3HasStarted = false
         if (!useExoFallback) {
             exoPlayer?.stop()
             exoPlayer?.clearMediaItems()
@@ -1187,7 +1196,8 @@ fun PlayerScreen(
         }
         val exoPlayer = ensureExoPlayer()
         val url = uiState.streamUrl.ifEmpty { return@LaunchedEffect }
-        val playbackUrl = if (isDvr) resolveDvrMedia3Uri(url) else url
+        var playbackUrl = if (isDvr) resolveDvrMedia3Uri(url) else url
+        var rollingSession: com.dylandos.iptv.ultimate.player.timeshift.RollingTimeshiftSession? = null
         if (requestToken !== latestStreamLoadToken) return@LaunchedEffect
         runCatching {
             mediaPlayer?.stop()
@@ -1211,6 +1221,27 @@ fun PlayerScreen(
             .setPreferredTextLanguage(SubtitleLanguage.toMedia3LanguageTag(settingsState.subtitleLanguage))
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, disableTextByDefault)
             .build()
+        try {
+        if (liveTimeshiftEnabled && liveTimeshiftPath != null && !url.substringBefore('?').endsWith(".m3u8", true)) {
+            try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val directory = File(liveTimeshiftPath)
+                    val session = com.dylandos.iptv.ultimate.player.timeshift.RollingTimeshiftSession(
+                        directory, url,
+                        TimeshiftRingMath.computeRingMaxBytes(directory.usableSpace, settingsState.timeshiftWindowMinutes),
+                        settingsState.timeshiftWindowMinutes
+                    )
+                    rollingSession = session
+                    playbackUrl = session.start()
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                rollingSession?.close()
+                rollingSession = null
+                android.widget.Toast.makeText(context, "Timeshift unavailable for this stream. Playing live.", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
         exoPlayer.setMediaItem(MediaItem.fromUri(playbackUrl))
         exoPlayer.prepare()
         if (requestToken !== latestStreamLoadToken) {
@@ -1219,7 +1250,11 @@ fun PlayerScreen(
             return@LaunchedEffect
         }
         exoPlayer.play()
-        Timber.w("Switched playback to Media3 fallback: $playbackUrl")
+        Timber.i("Media3 playback prepared (local timeshift=${rollingSession != null})")
+        kotlinx.coroutines.awaitCancellation()
+        } finally {
+            rollingSession?.close()
+        }
     }
 
     // Startup stall watchdog — VOD/Series: MPV → LibVLC → Media3. Live: LibVLC → Media3.
@@ -1235,11 +1270,17 @@ fun PlayerScreen(
         useExoFallback = preferMedia3Playback
         val firstTimeout = when {
             preferMpvVod -> 20_000L
+            liveTimeshiftEnabled -> 60_000L
             isLive -> 12_000L
             else -> 30_000L
         }
         delay(firstTimeout)
         if (requestToken !== latestStreamLoadToken) return@LaunchedEffect
+        // A ready or intentionally paused player has completed startup. Do not
+        // turn a user's first-minute pause/rewind into a fatal startup error.
+        if (userRequestedPause || media3HasStarted || (useExoFallback && exoPlayer?.playbackState == Player.STATE_READY)) {
+            return@LaunchedEffect
+        }
         if (isAnyEngineActuallyPlaying()) {
             isPlaying = true
             stopNonSelectedEngines()
@@ -2341,7 +2382,9 @@ fun PlayerScreen(
                     }
                     // S-017: MENU key — cycle aspect ratio (short press) + show stream info (long press handled as toggle)
                     Key.Menu -> {
-                        if (showStreamInfo) {
+                        if (isLive && liveTimeshiftEnabled) {
+                            showCatchupSheet = true
+                        } else if (showStreamInfo) {
                             // Second MENU press: hide stream info and reset aspect to auto
                             showStreamInfo = false
                         } else if (aspectOsdVisible) {
@@ -2718,6 +2761,7 @@ fun PlayerScreen(
                             programTime = uiState.liveEpgTime,
                             isLive = isLive,
                             isCatchupPlayback = uiState.isCatchupPlayback,
+                            localTimeshift = liveTimeshiftEnabled,
                             canRestartCurrentProgram = uiState.canRestartCurrentProgram,
                             isPlaying = isPlaying,
                             isRecording = isRecording,
@@ -2754,7 +2798,9 @@ fun PlayerScreen(
                                 controlsInteractionTick++
                                 when (idx) {
                                     0 -> {
-                                        if (settingsState.providerReplayEnabled && isLive && !uiState.isCatchupPlayback && (uiState.canRestartCurrentProgram || uiState.catchupPrograms.isNotEmpty())) {
+                                        if (liveTimeshiftEnabled && canSeekActivePlayer()) {
+                                            rewindLiveOrCatchup()
+                                        } else if (settingsState.providerReplayEnabled && isLive && !uiState.isCatchupPlayback && (uiState.canRestartCurrentProgram || uiState.catchupPrograms.isNotEmpty())) {
                                             showCatchupSheet = true
                                         } else if (isLive) {
                                             rewindLiveOrCatchup()
@@ -2987,6 +3033,22 @@ fun PlayerScreen(
                                 modifier = Modifier.fillMaxWidth().heightIn(max = 350.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
+                                if (liveTimeshiftEnabled && canSeekActivePlayer()) {
+                                    item {
+                                        TextButton(onClick = {
+                                            exoPlayer?.seekTo(0L)
+                                            playActivePlayer()
+                                            showCatchupSheet = false
+                                        }) { Text("Restart buffered TV") }
+                                    }
+                                    item {
+                                        TextButton(onClick = {
+                                            exoPlayer?.seekToDefaultPosition()
+                                            playActivePlayer()
+                                            showCatchupSheet = false
+                                        }) { Text("Return to live TV") }
+                                    }
+                                }
                                 if (uiState.canRestartCurrentProgram) {
                                     item {
                                         Surface(
@@ -3189,6 +3251,7 @@ private fun PlayerControls(
     programTime: String?,
     isLive: Boolean,
     isCatchupPlayback: Boolean,
+    localTimeshift: Boolean,
     canRestartCurrentProgram: Boolean,
     isPlaying: Boolean,
     isRecording: Boolean,
@@ -3302,9 +3365,9 @@ private fun PlayerControls(
             ) {
                 // 0: Rewind / Restart / Catch-up
                 PlayerControlBtn(
-                    icon = if (isLive && !isCatchupPlayback) Icons.Default.History else Icons.Default.FastRewind,
+                    icon = if (isLive && !isCatchupPlayback && !localTimeshift) Icons.Default.History else Icons.Default.FastRewind,
                     label = when {
-                        isLive && !isCatchupPlayback -> "Catch-up"
+                        isLive && !isCatchupPlayback && !localTimeshift -> "Catch-up"
                         else -> "Rewind"
                     },
                     index = 0,

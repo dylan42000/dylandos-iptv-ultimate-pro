@@ -586,7 +586,11 @@ class DvrViewModel @Inject constructor(
     }
 
     private fun resolveRecordingAccount(accountId: String?): SavedAccount? {
-        val accounts = _uiState.value.recordingAccounts
+        // Stream IDs belong to one provider. Reusing an ID with another
+        // subscription's server can record the wrong channel or an empty file.
+        fun providerKey(url: String) = url.trim().trimEnd('/').removePrefix("https://").removePrefix("http://").lowercase()
+        val currentProvider = providerKey(xtreamRepository.serverUrl)
+        val accounts = _uiState.value.recordingAccounts.filter { providerKey(it.serverUrl) == currentProvider }
         if (accounts.isEmpty()) return null
         accountId?.let { explicit ->
             val match = accounts.firstOrNull { it.id == explicit }

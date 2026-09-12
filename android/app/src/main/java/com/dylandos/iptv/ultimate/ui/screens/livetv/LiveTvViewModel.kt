@@ -357,6 +357,8 @@ class LiveTvViewModel @Inject constructor(
         else -> channels.filter { categoryMatches(it.categoryId, categoryId) }
     }
 
+    private val categorySelection = mutableMapOf<String, Int>()
+
     fun selectCategory(categoryId: String) {
         val state = _uiState.value
         val requestedCategoryId = normalizeCategoryId(categoryId)
@@ -366,18 +368,23 @@ class LiveTvViewModel @Inject constructor(
             state.categories.any { normalizeCategoryId(it.categoryId) == requestedCategoryId } -> requestedCategoryId
             else -> "ALL"
         }
+        if (activeCategoryId == state.selectedCategoryId && state.filteredChannels.isNotEmpty()) return
+        state.filteredChannels.getOrNull(state.focusedChannelIndex)?.let {
+            categorySelection[state.selectedCategoryId] = it.streamId
+        }
         val filtered = filterChannelsForCategory(
             state.channels,
             activeCategoryId,
             state.favoriteChannelIds
         )
+        val restoredIndex = filtered.indexOfFirst { it.streamId == categorySelection[activeCategoryId] }.coerceAtLeast(0)
         _uiState.value = state.copy(
             selectedCategoryId = activeCategoryId,
             filteredChannels = filtered,
-            focusedChannelIndex = 0,
+            focusedChannelIndex = restoredIndex,
             epgData = emptyMap()
         )
-        persistLiveSelection(categoryId = activeCategoryId, focusedIndex = 0)
+        persistLiveSelection(categoryId = activeCategoryId, focusedIndex = restoredIndex)
         epgJob?.cancel()
         // Cap initial EPG load to 40 channels — prevents sending 500+ concurrent requests
         // when switching to a large category. onVisibleChannelsChanged() handles the rest

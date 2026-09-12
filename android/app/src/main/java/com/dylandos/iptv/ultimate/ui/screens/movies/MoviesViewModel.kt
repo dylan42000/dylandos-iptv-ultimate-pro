@@ -60,7 +60,7 @@ class MoviesViewModel @Inject constructor(
         private const val KEY_GRID_FIRST_OFFSET = "movies_grid_first_offset"
         private const val KEY_CATEGORY_FIRST_INDEX = "movies_category_first_index"
         private const val KEY_CATEGORY_FIRST_OFFSET = "movies_category_first_offset"
-        private const val LOAD_TIMEOUT_MS = 25_000L
+        private const val LOAD_TIMEOUT_MS = 60_000L
         /** Hard cap when user browses "All Movies" — full catalogs OOM Firestick (~2GB). */
         private const val MAX_ALL_ITEMS = 200
         /** Cap per-category lists so a huge folder cannot flood Room/USB. */
@@ -183,7 +183,7 @@ class MoviesViewModel @Inject constructor(
                     }
 
                     val requestedCat = normalizeCategoryId(savedCategoryId)
-                    val activeCatId = when {
+                    var activeCatId = when {
                         requestedCat == FAVORITES_CATEGORY_ID -> FAVORITES_CATEGORY_ID
                         requestedCat == "ALL" -> "ALL"
                         requestedCat.isNotBlank() &&
@@ -195,7 +195,20 @@ class MoviesViewModel @Inject constructor(
                             }?.categoryId?.let(::normalizeCategoryId) ?: "ALL"
                     }
 
-                    val itemCount = persistCategory(activeCatId)
+                    var itemCount = try { persistCategory(activeCatId) } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException || activeCatId == FAVORITES_CATEGORY_ID) throw e
+                        0
+                    }
+                    if (activeCatId != FAVORITES_CATEGORY_ID && itemCount == 0) {
+                        for (category in categoryList.filter { it.categoryId !in listOf("ALL", FAVORITES_CATEGORY_ID) }.take(3)) {
+                            val candidateId = normalizeCategoryId(category.categoryId)
+                            val count = try { persistCategory(candidateId) } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                                0
+                            }
+                            if (count > 0) { activeCatId = candidateId; itemCount = count; break }
+                        }
+                    }
 
                     val cutoff = System.currentTimeMillis() - 90L * 24 * 3600 * 1000
                     val resumeMap = vodResumeDao.getRecentlyWatched(cutoff).associateBy { it.streamId }
@@ -269,7 +282,7 @@ class MoviesViewModel @Inject constructor(
                 // A5: cap at the network layer — the stream reader stops parsing after
                 // 2x the display cap (headroom so the content filter still finds enough
                 // matches) instead of materializing a 50k-item catalog on a 2 GB stick.
-                val raw = xtreamRepository.getVodStreams(maxItems = MAX_ALL_ITEMS * 2).getOrDefault(emptyList())
+                val raw = xtreamRepository.getVodStreams(maxItems = MAX_ALL_ITEMS * 2).getOrThrow()
                 val filtered = contentFilterRepository.filterMovies(raw)
                 if (filtered.size > MAX_ALL_ITEMS) {
                     Timber.w("Movies ALL capped at $MAX_ALL_ITEMS (fetched ${raw.size})")
@@ -277,7 +290,7 @@ class MoviesViewModel @Inject constructor(
                 } else filtered
             }
             else -> {
-                val raw = xtreamRepository.getVodStreams(categoryId, maxItems = MAX_CATEGORY_ITEMS * 2).getOrDefault(emptyList())
+                val raw = xtreamRepository.getVodStreams(categoryId, maxItems = MAX_CATEGORY_ITEMS * 2).getOrThrow()
                 val filtered = contentFilterRepository.filterMovies(raw)
                 if (filtered.size > MAX_CATEGORY_ITEMS) {
                     Timber.w(

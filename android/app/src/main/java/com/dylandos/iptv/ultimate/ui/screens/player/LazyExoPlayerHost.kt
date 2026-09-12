@@ -89,6 +89,9 @@ class LazyExoPlayerHost(
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         } ?: dataSourceFactory
         val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(10_000, 30_000, 1_000, 2_500)
+            .setTargetBufferBytes(32 * 1024 * 1024)
+            .setPrioritizeTimeOverSizeThresholds(false)
             // Rewind is served by the USB SimpleCache, not by retaining minutes of
             // decoded media in RAM.  The old 15-minute back buffer could exhaust a
             // 2 GB Firestick after 5–10 minutes of live TV.

@@ -421,6 +421,7 @@ export const SeriesPage: React.FC<SeriesPageProps> = ({
         {!isFiltering && filteredSeries.length > 0 && (
           <div className="w-full h-full p-4">
             <VirtualContentGrid
+              restorationKey={`series:${selectedCategoryId}:${filteredSeries[0]?.series_id}`}
               items={filteredSeries}
               renderCard={renderSeriesCard}
               columnWidth={gridSize.columnWidth}
